@@ -29,6 +29,7 @@
 #   sh run.sh config remove <name>   # remove an override from COMPOSE_FILE in .env
 #   sh run.sh compose-config         # dump fully-resolved docker compose config
 #   sh run.sh secrets                # print key passwords and API keys from .env
+#   sh run.sh ha <command>           # high availability (see: sh run.sh ha help)
 #
 
 set -e
@@ -263,6 +264,9 @@ case "$CMD" in
         done
         echo ""
         ;;
+    ha)
+        exec sh ha/ha-cli.sh "$@"
+        ;;
     help|-h|--help)
         cat <<EOF
 Usage: $(basename "$0") <command>
@@ -286,6 +290,8 @@ Commands:
   config remove <name>  Remove an override from COMPOSE_FILE in .env
   compose-config        Dump the fully-resolved docker compose config
   secrets               Show key passwords and API keys from .env
+  ha <command>          High availability: replicas and failover
+                        (run 'ha help' for the list)
 
 EOF
         ;;

@@ -1,0 +1,128 @@
+# A standby Supabase database node — run this on the second server.
+#
+# It clones the primary once, then streams its WAL continuously, so the copy
+# is seconds behind rather than a nightly dump. When the primary dies this node
+# can take over as the write target.
+#
+# This file is intentionally NOT named docker-compose.*.yml: it is a stack of
+# its own, not an overlay, and must never be layered onto a primary.
+#
+# Usage, from the docker/ directory on the standby server:
+#   cp .env.example .env      # then fill in the HA_* values, see ha/README.md
+#   docker compose -f standby.compose.yml up -d
+#
+# The Postgres image must match the primary's exactly — a physical replica is
+# a byte-level copy and will not start against a different major/minor build.
+
+name: supabase-standby
+
+services:
+  # Runs to completion before Postgres starts. On an empty volume it clones the
+  # primary; on an existing one it does nothing and replication just resumes.
+  standby-bootstrap:
+    container_name: supabase-standby-bootstrap
+    image: ${HA_POSTGRES_IMAGE:-supabase/postgres:17.6.1.136}
+    # Needs root to hand the fresh data directory to the postgres user; the
+    # clone itself runs as postgres.
+    user: root
+    restart: "no"
+    volumes:
+      - standby-data:/var/lib/postgresql/data:Z
+      - standby-db-config:/etc/postgresql-custom
+      - ./ha/bootstrap-standby.sh:/bootstrap-standby.sh:ro
+    entrypoint: ["/bin/sh", "/bootstrap-standby.sh"]
+    environment:
+      PGDATA: /var/lib/postgresql/data
+      HA_NODE_NAME: ${HA_NODE_NAME:-node-b}
+      HA_PRIMARY_HOST: ${HA_PRIMARY_HOST}
+      HA_PRIMARY_PORT: ${HA_PRIMARY_PORT:-5434}
+      HA_REPLICATION_USER: ${HA_REPLICATION_USER:-supabase_replicator}
+      HA_REPLICATION_PASSWORD: ${HA_REPLICATION_PASSWORD}
+      HA_REPLICATION_SLOT: ${HA_REPLICATION_SLOT:-}
+      HA_BOOTSTRAP_TIMEOUT: ${HA_BOOTSTRAP_TIMEOUT:-300}
+
+  db:
+    container_name: supabase-standby-db
+    image: ${HA_POSTGRES_IMAGE:-supabase/postgres:17.6.1.136}
+    restart: unless-stopped
+    depends_on:
+      standby-bootstrap:
+        condition: service_completed_successfully
+    volumes:
+      - standby-data:/var/lib/postgresql/data:Z
+      - standby-db-config:/etc/postgresql-custom
+    healthcheck:
+      # Reports ready in recovery too, which is exactly what a standby is.
+      test: ["CMD", "pg_isready", "-U", "postgres", "-h", "localhost"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    environment:
+      POSTGRES_HOST: /var/run/postgresql
+      PGPORT: ${POSTGRES_PORT:-5432}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: ${POSTGRES_DB:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-postgres}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXP: ${JWT_EXPIRY:-3600}
+    command:
+      [
+        "postgres",
+        "-c",
+        "config_file=/etc/postgresql/postgresql.conf",
+        "-c",
+        "log_min_messages=fatal",
+        # The image ships hot_standby=off, under which a node in recovery
+        # refuses every connection: no reads, no health check, and no way for
+        # the agent to see its own role. It only takes effect at startup, and
+        # is ignored once this node is promoted.
+        "-c",
+        "hot_standby=on"
+      ]
+    ports:
+      # The primary's router probes this node here, and it becomes the write
+      # target after a failover. Keep it on a private network or VPN.
+      - ${HA_DB_REPLICATION_PORT:-5434}:${POSTGRES_PORT:-5432}
+
+  ha-agent:
+    container_name: supabase-standby-ha-agent
+    build:
+      context: ./ha
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      HA_NODE_NAME: ${HA_NODE_NAME:-node-b}
+      HA_PG_HOST: db
+      HA_PG_PORT: ${POSTGRES_PORT:-5432}
+      # Must be a superuser — promoting this node calls pg_promote(), which is
+      # restricted to one. On Supabase that is supabase_admin, not postgres.
+      HA_PG_USER: ${HA_PG_USER:-supabase_admin}
+      HA_PG_PASSWORD: ${POSTGRES_PASSWORD}
+      HA_PG_DATABASE: ${POSTGRES_DB:-postgres}
+      HA_API_TOKEN: ${HA_API_TOKEN}
+      # Setting the upstream is what turns on the failover supervisor.
+      HA_PRIMARY_HOST: ${HA_PRIMARY_HOST}
+      HA_PRIMARY_PORT: ${HA_PRIMARY_PORT:-5434}
+      # manual (default) alarms and waits for `run.sh ha promote`.
+      # auto promotes on its own, but only with witnesses configured — see
+      # ha/README.md on why two nodes cannot decide this alone.
+      HA_FAILOVER_MODE: ${HA_FAILOVER_MODE:-manual}
+      HA_WITNESS_URLS: ${HA_WITNESS_URLS:-}
+      HA_CHECK_INTERVAL: ${HA_CHECK_INTERVAL:-5}
+      HA_FAILURE_THRESHOLD: ${HA_FAILURE_THRESHOLD:-3}
+      HA_MAX_LAG_BYTES: ${HA_MAX_LAG_BYTES:-0}
+      HA_LOG_LEVEL: ${HA_LOG_LEVEL:-INFO}
+      # The other agents in this group, so this node's overview page on port
+      # 8008 shows the whole picture — useful precisely when the primary is
+      # the thing that is down.
+      HA_PEERS: ${HA_PEERS:-}
+    ports:
+      - ${HA_AGENT_PORT:-8008}:8008
+
+volumes:
+  standby-data:
+  standby-db-config:

@@ -1,0 +1,88 @@
+# High availability overlay for the primary server.
+#
+# Adds two things to the stack:
+#   pg-router   every service reaches Postgres through it, so a failover is
+#               invisible to auth/rest/realtime/storage/meta/functions/pooler
+#   ha-agent    reports this node's role and lag; the router probes it
+#
+# Enable with:
+#   sh run.sh config add ha
+#   sh run.sh ha init            # sets POSTGRES_HOST=pg-router and a token
+#   sh run.sh start
+#
+# The router only does its job when POSTGRES_HOST points at it — `ha init`
+# takes care of that. Without it the stack still runs, but talks to db
+# directly and will not fail over.
+
+services:
+  ha-agent:
+    container_name: supabase-ha-agent
+    build:
+      context: ./ha
+    restart: unless-stopped
+    environment:
+      HA_NODE_NAME: ${HA_NODE_NAME:-node-a}
+      HA_PG_HOST: db
+      HA_PG_PORT: ${POSTGRES_PORT}
+      # Must be a superuser — promoting a standby calls pg_promote(), which is
+      # restricted to one. On Supabase that is supabase_admin, not postgres.
+      HA_PG_USER: ${HA_PG_USER:-supabase_admin}
+      HA_PG_PASSWORD: ${POSTGRES_PASSWORD}
+      HA_PG_DATABASE: ${POSTGRES_DB}
+      HA_API_TOKEN: ${HA_API_TOKEN}
+      # A primary has no upstream to supervise, so no failover mode applies
+      # here. This node simply reports that it is the primary.
+      HA_MAX_LAG_BYTES: ${HA_MAX_LAG_BYTES:-0}
+      HA_LOG_LEVEL: ${HA_LOG_LEVEL:-INFO}
+      # The other agents in this group. Feeds the overview page on port 8008,
+      # which shows every node's role and lag in one place. Maintained by
+      # `run.sh ha nodes add`.
+      HA_PEERS: ${HA_PEERS:-}
+    ports:
+      # Published so standbys and witnesses on other servers can probe it.
+      - ${HA_AGENT_PORT:-8008}:8008
+    depends_on:
+      db:
+        condition: service_healthy
+
+  pg-router:
+    container_name: supabase-pg-router
+    image: haproxy:3.0-alpine
+    restart: unless-stopped
+    volumes:
+      - ./ha/render-haproxy.sh:/usr/local/bin/render-haproxy.sh:ro
+    entrypoint: ["/bin/sh", "/usr/local/bin/render-haproxy.sh"]
+    environment:
+      # name=host:pgport:agentport, first entry is the preferred primary.
+      # Standbys on other servers are added with their public address, e.g.
+      #   HA_NODES=node-a=db:5432:8008,node-b=10.0.0.2:5434:8008
+      HA_NODES: ${HA_NODES:-node-a=db:5432:8008}
+      HA_ROUTER_PORT: ${POSTGRES_PORT}
+      HA_ROUTER_READ_PORT: 5433
+      HA_ROUTER_STATS_PORT: 8404
+      HA_ROUTER_CHECK_INTERVAL: ${HA_ROUTER_CHECK_INTERVAL:-2s}
+      HA_ROUTER_CHECK_FALL: ${HA_ROUTER_CHECK_FALL:-2}
+    healthcheck:
+      # The stats endpoint answering means the router is up and routing;
+      # `run.sh start` uses `up --wait`, which needs a check to wait on.
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8404/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      # HAProxy resolves every node at startup, twice. Nodes on other servers
+      # that are down or slow to answer each cost a resolver timeout, so give
+      # it room to bind before the checks start counting.
+      start_period: 45s
+    ports:
+      # Read-only endpoint spread across caught-up standbys.
+      - ${HA_ROUTER_READ_PORT:-5433}:5433
+      - ${HA_ROUTER_STATS_PORT:-8404}:8404
+    depends_on:
+      ha-agent:
+        condition: service_started
+
+  db:
+    ports:
+      # Standbys on other servers connect here to stream WAL. Keep this port
+      # on a private network or VPN — it is a direct line to Postgres.
+      - ${HA_DB_REPLICATION_PORT:-5434}:${POSTGRES_PORT}

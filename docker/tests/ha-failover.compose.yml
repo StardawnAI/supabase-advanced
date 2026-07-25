@@ -1,0 +1,154 @@
+# Two-node HA environment used by tests/test-ha-failover.sh.
+#
+# Each node puts its agent in the database's network namespace, so Postgres and
+# the agent answer on one address — the same shape as a real deployment where a
+# server publishes both ports. Nothing is published to the host: the test drives
+# everything from the `client` container inside the network.
+
+name: hatest
+
+x-pg-env: &pg-env
+  POSTGRES_HOST: /var/run/postgresql
+  POSTGRES_PASSWORD: ${HA_TEST_PG_PASSWORD:-testpass}
+  PGPASSWORD: ${HA_TEST_PG_PASSWORD:-testpass}
+  POSTGRES_DB: postgres
+  PGPORT: 5432
+  POSTGRES_PORT: 5432
+  JWT_SECRET: super-secret-jwt-token-with-at-least-32-characters-long
+  JWT_EXP: 3600
+
+x-agent-env: &agent-env
+  HA_PG_PORT: 5432
+  # Must be a superuser — pg_promote() is restricted to one. On Supabase the
+  # postgres role is not a superuser; supabase_admin is.
+  HA_PG_USER: supabase_admin
+  HA_PG_PASSWORD: ${HA_TEST_PG_PASSWORD:-testpass}
+  HA_PG_DATABASE: postgres
+  HA_API_TOKEN: ${HA_TEST_TOKEN:-testtoken}
+  HA_LOG_LEVEL: ${HA_TEST_LOG_LEVEL:-INFO}
+
+x-db: &db
+  image: ${HA_TEST_IMAGE:-supabase/postgres:17.6.1.136}
+  environment: *pg-env
+  command: ["postgres", "-c", "config_file=/etc/postgresql/postgresql.conf"]
+  healthcheck:
+    test: ["CMD", "pg_isready", "-U", "postgres", "-h", "localhost"]
+    interval: 3s
+    timeout: 3s
+    retries: 30
+
+services:
+  primary-db:
+    <<: *db
+    volumes:
+      - primary-data:/var/lib/postgresql/data
+
+  primary-agent:
+    build: ../ha
+    network_mode: "service:primary-db"
+    restart: unless-stopped
+    depends_on:
+      primary-db: {condition: service_healthy}
+    environment:
+      <<: *agent-env
+      HA_NODE_NAME: primary
+      HA_PG_HOST: 127.0.0.1
+      HA_PEERS: http://standby-db:8008
+
+  standby-bootstrap:
+    image: ${HA_TEST_IMAGE:-supabase/postgres:17.6.1.136}
+    user: root
+    restart: "no"
+    depends_on:
+      primary-db: {condition: service_healthy}
+    volumes:
+      - standby-data:/var/lib/postgresql/data
+      - ../ha/bootstrap-standby.sh:/bootstrap-standby.sh:ro
+    entrypoint: ["/bin/sh", "/bootstrap-standby.sh"]
+    environment:
+      PGDATA: /var/lib/postgresql/data
+      HA_NODE_NAME: standby
+      HA_PRIMARY_HOST: primary-db
+      HA_PRIMARY_PORT: 5432
+      HA_REPLICATION_PASSWORD: ${HA_TEST_REPL_PASSWORD:-replpass}
+      HA_BOOTSTRAP_TIMEOUT: 180
+
+  standby-db:
+    <<: *db
+    volumes:
+      - standby-data:/var/lib/postgresql/data
+    depends_on:
+      standby-bootstrap: {condition: service_completed_successfully}
+    # The image ships hot_standby=off, under which a node in recovery refuses
+    # every connection — no reads, no health check, no role query.
+    command:
+      ["postgres", "-c", "config_file=/etc/postgresql/postgresql.conf",
+       "-c", "hot_standby=on"]
+
+  standby-agent:
+    build: ../ha
+    network_mode: "service:standby-db"
+    restart: unless-stopped
+    depends_on:
+      standby-db: {condition: service_healthy}
+    environment:
+      <<: *agent-env
+      HA_NODE_NAME: standby
+      HA_PG_HOST: 127.0.0.1
+      HA_PEERS: http://primary-db:8008
+      HA_PRIMARY_HOST: primary-db
+      HA_PRIMARY_PORT: 5432
+      HA_FAILOVER_MODE: ${HA_TEST_FAILOVER_MODE:-auto}
+      HA_WITNESS_URLS: http://witness:8008
+      HA_CHECK_INTERVAL: 2
+      HA_FAILURE_THRESHOLD: 3
+
+  # An independent third opinion, so the standby can tell a dead primary from
+  # a link failure between the two nodes.
+  witness:
+    build: ../ha
+    restart: unless-stopped
+    environment:
+      <<: *agent-env
+      HA_NODE_NAME: witness
+      HA_ROLE: witness
+
+  router:
+    image: haproxy:3.0-alpine
+    restart: unless-stopped
+    volumes:
+      - ../ha/render-haproxy.sh:/usr/local/bin/render-haproxy.sh:ro
+    entrypoint: ["/bin/sh", "/usr/local/bin/render-haproxy.sh"]
+    environment:
+      HA_NODES: primary=primary-db:5432:8008,standby=standby-db:5432:8008
+      HA_ROUTER_PORT: 5432
+      HA_ROUTER_READ_PORT: 5433
+      HA_ROUTER_CHECK_INTERVAL: 1s
+      HA_ROUTER_CHECK_FALL: 2
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8404/"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      # HAProxy tries to resolve every node at startup, twice (config check and
+      # load). With a node that is not up yet each attempt burns the resolver
+      # timeout, so binding can take ~20s. Without this grace period the checks
+      # run out before it ever listens.
+      start_period: 45s
+
+  # Drives the test from inside the network, the way an application would.
+  client:
+    image: ${HA_TEST_IMAGE:-supabase/postgres:17.6.1.136}
+    entrypoint: ["sleep", "infinity"]
+    # The image ships a Postgres healthcheck, but this container runs no server
+    # and would never report healthy. It is only a psql shell, so being up is
+    # the whole of its health — and `up --wait` needs *some* check to look at.
+    healthcheck:
+      test: ["CMD", "true"]
+      interval: 5s
+      timeout: 3s
+      retries: 2
+
+volumes:
+  primary-data:
+  standby-data:
