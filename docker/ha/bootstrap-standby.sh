@@ -42,14 +42,27 @@ if [ -f "$PGDATA/PG_VERSION" ]; then
     exit 0
 fi
 
-info "waiting for primary ${PRIMARY_HOST}:${PRIMARY_PORT} (up to ${TIMEOUT}s)"
+# Waits for a real replication connection rather than a plain pg_isready.
+# pg_isready only proves the server is listening; it says nothing about the
+# replication role or the pg_hba rule. The primary also applies a reloaded
+# pg_hba.conf asynchronously, so a rule added moments ago may not be live yet.
+info "waiting for primary ${PRIMARY_HOST}:${PRIMARY_PORT} to accept replication (up to ${TIMEOUT}s)"
 waited=0
-until pg_isready -h "$PRIMARY_HOST" -p "$PRIMARY_PORT" -U "$REPL_USER" -t 3 >/dev/null 2>&1; do
+while :; do
+    # Keeps stderr (the reason it failed) and discards the result row.
+    if last_error=$(PGPASSWORD="$REPL_PASSWORD" psql \
+            "postgresql://${REPL_USER}@${PRIMARY_HOST}:${PRIMARY_PORT}/postgres?replication=database" \
+            -X -A -t -c "IDENTIFY_SYSTEM" 2>&1 >/dev/null); then
+        break
+    fi
     waited=$((waited + 3))
-    [ "$waited" -ge "$TIMEOUT" ] && die "primary did not become reachable within ${TIMEOUT}s"
+    if [ "$waited" -ge "$TIMEOUT" ]; then
+        echo "[bootstrap] last error: $last_error" >&2
+        die "primary did not accept a replication connection within ${TIMEOUT}s"
+    fi
     sleep 3
 done
-info "primary is reachable"
+info "primary accepts replication connections"
 
 mkdir -p "$PGDATA"
 chown postgres:postgres "$PGDATA"

@@ -64,6 +64,15 @@ sql_via_router() { # port statement
         -v ON_ERROR_STOP=1 -c "$*" 2>/dev/null | tr -d '\r' | head -n1
 }
 
+# True once the primary actually accepts a replication connection.
+# pg_reload_conf() returns before the postmaster has processed the signal, so
+# the only reliable check is to open the kind of connection the clone needs.
+replication_ready() {
+    dc exec -T -e PGPASSWORD="$REPL_PASSWORD" client \
+        psql "postgresql://$REPL_USER@primary-db:5432/postgres?replication=database" \
+        -X -A -t -c "IDENTIFY_SYSTEM" >/dev/null 2>&1
+}
+
 # HTTP status of an agent endpoint, 0 when it cannot be reached.
 http_status() { # url
     dc exec -T witness python3 -c '
@@ -99,6 +108,7 @@ cleanup() {
     code=$?
     if [ "$code" -ne 0 ] || [ "$FAILURES" -ne 0 ]; then
         step "Logs (the run did not come out clean)"
+        dc logs --tail 25 standby-bootstrap 2>/dev/null || true
         dc logs --tail 40 standby-agent 2>/dev/null || true
         dc logs --tail 20 router 2>/dev/null || true
     fi
@@ -116,7 +126,7 @@ trap cleanup EXIT
 
 step "Starting the primary"
 dc down -v --remove-orphans >/dev/null 2>&1 || true
-dc up -d --build --wait primary-db primary-agent witness
+dc up -d --build --wait primary-db primary-agent witness router client
 echo "  primary is up: $(sql primary-db 'SELECT version()' | cut -c1-40)"
 
 step "Preparing the primary to serve standbys"
@@ -134,6 +144,8 @@ dc exec -T -u root primary-db sh -c \
     "grep -q 'replication $REPL_USER' '$HBA_FILE' || printf '\nhost replication $REPL_USER 0.0.0.0/0 scram-sha-256\n' >> '$HBA_FILE'"
 sql primary-db 'SELECT pg_reload_conf()' >/dev/null
 echo "  replication role and pg_hba rule in place ($HBA_FILE)"
+wait_for "the primary to accept replication connections" 30 replication_ready \
+    || fail "primary never accepted a replication connection"
 check_eq "wal_level allows streaming replication" "logical" "$(sql primary-db 'SHOW wal_level')"
 
 step "Seeding data before the standby exists"

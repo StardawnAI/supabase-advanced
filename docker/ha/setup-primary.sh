@@ -100,6 +100,30 @@ fi
 psql_su -c "SELECT pg_reload_conf()" >/dev/null
 info "configuration reloaded"
 
+echo "==> Verifying"
+# A reloaded pg_hba.conf is applied asynchronously, so poll instead of assuming.
+# The connection goes over TCP to the service name, which is what a remote
+# standby does — connecting over localhost would hit a different, laxer rule.
+verified=false
+attempt=0
+while [ "$attempt" -lt 10 ]; do
+    if docker compose exec -T -e PGPASSWORD="$REPL_PASSWORD" "$DB_SERVICE" psql \
+        "postgresql://${REPL_USER}@${DB_SERVICE}:${POSTGRES_PORT:-5432}/postgres?replication=database" \
+        -X -A -t -c "IDENTIFY_SYSTEM" >/dev/null 2>&1; then
+        verified=true
+        break
+    fi
+    attempt=$((attempt + 1))
+    sleep 2
+done
+if [ "$verified" = true ]; then
+    info "replication connections are accepted"
+else
+    warn "could not open a replication connection yet. The standby retries on its"
+    warn "own, so this is often just timing — but if the clone keeps failing, check"
+    warn "the role, the pg_hba rule and the firewall between the servers."
+fi
+
 [ "$REPL_CIDR" = "0.0.0.0/0" ] && warn \
     "replication is open to every address. Restrict it with HA_REPLICATION_CIDR, or make sure the Postgres port is only reachable over a private network or VPN."
 
