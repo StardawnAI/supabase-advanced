@@ -32,6 +32,20 @@ psql_su() {
         psql -X -q -A -t -U postgres -d postgres -v ON_ERROR_STOP=1 "$@"
 }
 
+# Makes Postgres re-read pg_hba.conf.
+#
+# pg_reload_conf() requires superuser, and in Supabase the `postgres` role is
+# not one — only supabase_admin is. Calling it as `postgres` fails, and a
+# swallowed failure here is invisible until the first clone is rejected with
+# "no pg_hba.conf entry". Signalling the postmaster works regardless of role.
+reload_conf() {
+    docker compose exec -T -u root "$DB_SERVICE" sh -c '
+        set -e
+        data_dir=$(psql -U postgres -h 127.0.0.1 -X -A -t -c "SHOW data_directory")
+        kill -HUP "$(head -1 "$data_dir/postmaster.pid")"
+    '
+}
+
 gen_password() {
     if command -v openssl >/dev/null 2>&1; then
         openssl rand -hex 24
@@ -97,7 +111,7 @@ else
         "printf '\n# Added by supabase-advanced ha/setup-primary.sh\n%s\n' '$HBA_RULE' >> '$HBA_FILE'"
     info "appended to $HBA_FILE: $HBA_RULE"
 fi
-psql_su -c "SELECT pg_reload_conf()" >/dev/null
+reload_conf || die "could not signal Postgres to reload its configuration"
 info "configuration reloaded"
 
 echo "==> Verifying"

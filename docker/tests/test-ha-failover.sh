@@ -144,7 +144,13 @@ EOSQL
 HBA_FILE=$(sql primary-db 'SHOW hba_file')
 dc exec -T -u root primary-db sh -c \
     "grep -q 'replication $REPL_USER' '$HBA_FILE' || printf '\nhost replication $REPL_USER 0.0.0.0/0 scram-sha-256\n' >> '$HBA_FILE'"
-sql primary-db 'SELECT pg_reload_conf()' >/dev/null
+# pg_reload_conf() needs superuser and the `postgres` role is not one in
+# Supabase, so signal the postmaster instead.
+dc exec -T -u root primary-db sh -c '
+    set -e
+    data_dir=$(psql -U postgres -h 127.0.0.1 -X -A -t -c "SHOW data_directory")
+    kill -HUP "$(head -1 "$data_dir/postmaster.pid")"
+'
 echo "  replication role and pg_hba rule in place ($HBA_FILE)"
 wait_for "the primary to accept replication connections" 30 replication_ready \
     || fail "primary never accepted a replication connection"
