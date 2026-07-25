@@ -121,6 +121,10 @@ services:
   client:
     image: ${HA_TEST_IMAGE:-supabase/postgres:17.6.1.136}
     entrypoint: ["sleep", "infinity"]
+    # The image ships a Postgres healthcheck; this container runs no server, so
+    # it would never report healthy and `up --wait` would block on it.
+    healthcheck:
+      disable: true
 
 volumes:
   primary-data:

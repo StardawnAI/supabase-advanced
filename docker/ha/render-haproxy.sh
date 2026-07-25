@@ -54,9 +54,12 @@ emit_servers() {
         if [ "$mark_backup" = "backup" ] && [ "$index" -gt 0 ]; then
             flags=" backup"
         fi
-        # init-addr lets HAProxy start even while a node is unresolvable,
-        # which matters when the other server is still booting.
-        printf '    server %s %s:%s check port %s init-addr last,libc,none%s\n' \
+        # `resolvers` keeps re-resolving the name at runtime. Without it
+        # HAProxy resolves once at startup and permanently disables any node it
+        # cannot look up — so a standby added later, or one whose address
+        # changes, would never be picked up. init-addr lets it start anyway
+        # while the other server is still booting.
+        printf '    server %s %s:%s check port %s resolvers dns init-addr last,libc,none%s\n' \
             "$name" "$host" "$pg_port" "$agent_port" "$flags"
         index=$((index + 1))
         IFS=,
@@ -69,6 +72,20 @@ cat > "$CFG" <<EOF
 global
     log stdout format raw local0 ${HA_ROUTER_LOG_LEVEL:-info}
     maxconn ${HA_ROUTER_MAXCONN:-4000}
+
+# Runtime DNS. The default is Docker's embedded resolver; set
+# HA_ROUTER_RESOLVER when the router runs somewhere else. Plain IP addresses in
+# HA_NODES bypass this entirely.
+resolvers dns
+    nameserver default ${HA_ROUTER_RESOLVER:-127.0.0.11:53}
+    resolve_retries 3
+    timeout resolve 1s
+    timeout retry 1s
+    hold valid 5s
+    hold other 5s
+    hold refused 5s
+    hold nx 5s
+    hold timeout 5s
 
 defaults
     mode tcp
