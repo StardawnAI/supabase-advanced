@@ -24,7 +24,9 @@ services:
       HA_NODE_NAME: ${HA_NODE_NAME:-node-a}
       HA_PG_HOST: db
       HA_PG_PORT: ${POSTGRES_PORT}
-      HA_PG_USER: postgres
+      # Must be a superuser — promoting a standby calls pg_promote(), which is
+      # restricted to one. On Supabase that is supabase_admin, not postgres.
+      HA_PG_USER: ${HA_PG_USER:-supabase_admin}
       HA_PG_PASSWORD: ${POSTGRES_PASSWORD}
       HA_PG_DATABASE: ${POSTGRES_DB}
       HA_API_TOKEN: ${HA_API_TOKEN}

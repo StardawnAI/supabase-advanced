@@ -61,6 +61,10 @@ class Config:
         self.role_mode = env("HA_ROLE", "node").strip().lower()
 
         # The Postgres node this agent is responsible for.
+        #
+        # HA_PG_USER must be a superuser: pg_promote() is restricted to one,
+        # so a standby cannot be promoted without it. On Supabase that role is
+        # supabase_admin, not postgres — the compose files set it accordingly.
         self.pg_host = env("HA_PG_HOST", "db")
         self.pg_port = int(env("HA_PG_PORT", "5432"))
         self.pg_user = env("HA_PG_USER", "postgres")

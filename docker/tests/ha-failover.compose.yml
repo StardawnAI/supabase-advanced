@@ -19,7 +19,9 @@ x-pg-env: &pg-env
 
 x-agent-env: &agent-env
   HA_PG_PORT: 5432
-  HA_PG_USER: postgres
+  # Must be a superuser — pg_promote() is restricted to one. On Supabase the
+  # postgres role is not a superuser; supabase_admin is.
+  HA_PG_USER: supabase_admin
   HA_PG_PASSWORD: ${HA_TEST_PG_PASSWORD:-testpass}
   HA_PG_DATABASE: postgres
   HA_API_TOKEN: ${HA_TEST_TOKEN:-testtoken}
