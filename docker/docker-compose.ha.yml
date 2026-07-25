@@ -34,6 +34,10 @@ services:
       # here. This node simply reports that it is the primary.
       HA_MAX_LAG_BYTES: ${HA_MAX_LAG_BYTES:-0}
       HA_LOG_LEVEL: ${HA_LOG_LEVEL:-INFO}
+      # The other agents in this group. Feeds the overview page on port 8008,
+      # which shows every node's role and lag in one place. Maintained by
+      # `run.sh ha nodes add`.
+      HA_PEERS: ${HA_PEERS:-}
     ports:
       # Published so standbys and witnesses on other servers can probe it.
       - ${HA_AGENT_PORT:-8008}:8008

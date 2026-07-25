@@ -209,6 +209,15 @@ check_eq "standby is offered for reads" "200" "$(http_status http://standby-db:8
 check_eq "witness stays out of the routing" "503" "$(http_status http://witness:8008/primary)"
 check_eq "witness reports itself healthy" "200" "$(http_status http://witness:8008/health)"
 
+step "The overview page sees the whole group"
+check_eq "the page loads" "200" "$(http_status http://primary-db:8008/)"
+CLUSTER=$(dc exec -T witness python3 -c '
+import sys, json, urllib.request
+d = json.load(urllib.request.urlopen(sys.argv[1], timeout=5))
+print("%d %d %s" % (len(d["nodes"]), d["primary_count"], d["split_brain"]))
+' http://primary-db:8008/cluster 2>/dev/null | tr -d '\r' | head -n1)
+check_eq "it lists both nodes, one primary, no split brain" "2 1 False" "$CLUSTER"
+
 step "The router follows the agents"
 check_eq "writes through the router land on the primary" "f" "$(sql_via_router 5432 'SELECT pg_is_in_recovery()')"
 check_eq "reads through the router land on the standby" "t" "$(sql_via_router 5433 'SELECT pg_is_in_recovery()')"

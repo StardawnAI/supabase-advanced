@@ -223,6 +223,20 @@ case "$CMD" in
                 new="${current:+$current,}${name}=${host}:${pgport}:${agentport}"
                 env_set HA_NODES "$new"
                 info "HA_NODES=$new"
+
+                # The router and the overview page need the same node from two
+                # angles: the router talks to Postgres, the overview talks to
+                # the agent. Keeping one command in charge of both means they
+                # cannot drift apart.
+                peers=$(env_get HA_PEERS)
+                peer_url="http://${host}:${agentport}"
+                case ",$peers," in
+                    *",$peer_url,"*) ;;
+                    *)
+                        env_set HA_PEERS "${peers:+$peers,}$peer_url"
+                        info "HA_PEERS=$(env_get HA_PEERS)"
+                        ;;
+                esac
                 info "apply it with: sh run.sh ha router-reload"
                 ;;
             *)

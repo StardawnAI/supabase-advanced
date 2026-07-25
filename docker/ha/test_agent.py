@@ -269,5 +269,77 @@ class StatusReport(unittest.TestCase):
         self.assertFalse(agent.replica_is_servable(cfg, status))
 
 
+class ClusterOverview(unittest.TestCase):
+    """The overview must show what is actually there, including trouble."""
+
+    def build(self, peers, peer_states):
+        cfg = make_config(HA_PEERS=",".join(peers))
+        node = mock.Mock()
+        node.in_recovery.return_value = False  # this node is the primary
+        node.connected_replicas.return_value = []
+        patcher = mock.patch.object(
+            agent, "fetch_peer_status", side_effect=list(peer_states)
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return agent.build_cluster(cfg, node, None)
+
+    def test_lists_this_node_and_its_peers(self):
+        cluster = self.build(
+            ["http://b:8008"], [{"node": "b", "role": "standby"}]
+        )
+        self.assertEqual(len(cluster["nodes"]), 2)
+        self.assertTrue(cluster["nodes"][0]["is_self"])
+        self.assertFalse(cluster["nodes"][1]["is_self"])
+
+    def test_one_primary_is_not_split_brain(self):
+        cluster = self.build(
+            ["http://b:8008"], [{"node": "b", "role": "standby"}]
+        )
+        self.assertEqual(cluster["primary_count"], 1)
+        self.assertFalse(cluster["split_brain"])
+
+    def test_two_primaries_are_flagged(self):
+        # Both nodes taking writes is the one state that silently destroys
+        # data, so it has to be visible rather than inferred.
+        cluster = self.build(
+            ["http://b:8008"], [{"node": "b", "role": "primary"}]
+        )
+        self.assertEqual(cluster["primary_count"], 2)
+        self.assertTrue(cluster["split_brain"])
+
+    def test_an_unreachable_peer_does_not_break_the_overview(self):
+        cluster = self.build(
+            ["http://b:8008"],
+            [{"node": "http://b:8008", "role": "unreachable", "healthy": False}],
+        )
+        self.assertEqual(len(cluster["nodes"]), 2)
+        self.assertEqual(cluster["nodes"][1]["role"], "unreachable")
+        self.assertFalse(cluster["split_brain"])
+
+    def test_no_primary_at_all_is_visible(self):
+        cfg = make_config(HA_PEERS="http://b:8008")
+        node = mock.Mock()
+        node.in_recovery.return_value = True
+        node.standby_lag.return_value = {"lag_seconds": 0, "lag_bytes": 0,
+                                         "receive_lsn": None, "streaming": False}
+        with mock.patch.object(
+            agent, "fetch_peer_status", return_value={"node": "b", "role": "standby"}
+        ):
+            cluster = agent.build_cluster(cfg, node, None)
+        self.assertEqual(cluster["primary_count"], 0)
+
+
+class PeerFetching(unittest.TestCase):
+    def test_a_dead_peer_is_reported_not_raised(self):
+        with mock.patch.object(
+            agent.urllib.request, "urlopen", side_effect=OSError("refused")
+        ):
+            status = agent.fetch_peer_status("http://gone:8008", "tok", 3)
+        self.assertEqual(status["role"], "unreachable")
+        self.assertFalse(status["healthy"])
+        self.assertIn("refused", status["error"])
+
+
 if __name__ == "__main__":
     unittest.main()

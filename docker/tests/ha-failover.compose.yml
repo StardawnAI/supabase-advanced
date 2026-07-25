@@ -53,6 +53,7 @@ services:
       <<: *agent-env
       HA_NODE_NAME: primary
       HA_PG_HOST: 127.0.0.1
+      HA_PEERS: http://standby-db:8008
 
   standby-bootstrap:
     image: ${HA_TEST_IMAGE:-supabase/postgres:17.6.1.136}
@@ -94,6 +95,7 @@ services:
       <<: *agent-env
       HA_NODE_NAME: standby
       HA_PG_HOST: 127.0.0.1
+      HA_PEERS: http://primary-db:8008
       HA_PRIMARY_HOST: primary-db
       HA_PRIMARY_PORT: 5432
       HA_FAILOVER_MODE: ${HA_TEST_FAILOVER_MODE:-auto}

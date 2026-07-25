@@ -82,6 +82,13 @@ class Config:
             for u in env("HA_WITNESS_URLS", "").split(",")
             if u.strip()
         ]
+        # Other agents in this group, for the cluster overview. Comma-separated
+        # base URLs, e.g. "http://10.0.0.1:8008,http://10.0.0.2:8008".
+        self.peer_urls = [
+            u.strip().rstrip("/")
+            for u in env("HA_PEERS", "").split(",")
+            if u.strip()
+        ]
         self.check_interval = float(env("HA_CHECK_INTERVAL", "5"))
         self.failure_threshold = int(env("HA_FAILURE_THRESHOLD", "3"))
         self.connect_timeout = int(env("HA_CONNECT_TIMEOUT", "3"))
@@ -428,6 +435,42 @@ def build_status(cfg: Config, node: Node, sup: Supervisor | None) -> dict:
     return status
 
 
+def fetch_peer_status(url: str, token: str, timeout: int) -> dict:
+    """Reads another agent's status. Never raises — a peer being down is news,
+    not an error."""
+    req = urllib.request.Request(
+        f"{url}/status", headers={"Authorization": f"Bearer {token}"}
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            status = json.load(resp)
+    except (urllib.error.URLError, OSError, ValueError, json.JSONDecodeError) as exc:
+        return {"node": url, "role": "unreachable", "healthy": False, "error": str(exc)}
+    status["agent_url"] = url
+    return status
+
+
+def build_cluster(cfg: Config, node: Node, sup: Supervisor | None) -> dict:
+    """This node's view of the whole group, for the overview page."""
+    local = build_status(cfg, node, sup)
+    local["agent_url"] = "self"
+    local["is_self"] = True
+    nodes = [local]
+    for url in cfg.peer_urls:
+        peer = fetch_peer_status(url, cfg.token, cfg.connect_timeout + 2)
+        peer["is_self"] = False
+        nodes.append(peer)
+
+    primaries = [n for n in nodes if n.get("role") == "primary"]
+    return {
+        "nodes": nodes,
+        "primary_count": len(primaries),
+        # More than one node claiming to be primary means writes may be going
+        # to both. Surfacing it is the point — it will not fix itself.
+        "split_brain": len(primaries) > 1,
+    }
+
+
 def replica_is_servable(cfg: Config, status: dict) -> bool:
     """Whether a standby is fresh enough to serve reads."""
     if status.get("role") != "standby":
@@ -442,6 +485,198 @@ def replica_is_servable(cfg: Config, status: dict) -> bool:
 # --------------------------------------------------------------------------
 # HTTP interface
 # --------------------------------------------------------------------------
+
+
+DASHBOARD_HTML = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Supabase HA</title>
+<style>
+  :root { color-scheme: light dark; --bg:#fff; --fg:#111; --muted:#666;
+          --line:#e3e3e3; --card:#fafafa; --ok:#15803d; --warn:#b45309; --bad:#b91c1c; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#0f0f0f; --fg:#ededed; --muted:#9a9a9a;
+            --line:#2a2a2a; --card:#171717; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:2rem 1rem; background:var(--bg); color:var(--fg);
+         font:15px/1.5 ui-sans-serif, system-ui, -apple-system, sans-serif; }
+  main { max-width: 60rem; margin: 0 auto; }
+  h1 { font-size:1.3rem; margin:0 0 .25rem; }
+  .sub { color:var(--muted); margin:0 0 1.5rem; font-size:.9rem; }
+  .bar { display:flex; gap:.5rem; align-items:center; flex-wrap:wrap;
+         margin-bottom:1.25rem; }
+  input { padding:.45rem .6rem; border:1px solid var(--line); border-radius:6px;
+          background:var(--bg); color:var(--fg); font:inherit; font-size:.9rem;
+          min-width:16rem; }
+  button { padding:.45rem .8rem; border:1px solid var(--line); border-radius:6px;
+           background:var(--card); color:var(--fg); font:inherit; font-size:.9rem;
+           cursor:pointer; }
+  button:hover:not(:disabled) { border-color:var(--muted); }
+  button:disabled { opacity:.4; cursor:not-allowed; }
+  .wrap { overflow-x:auto; }
+  table { border-collapse:collapse; width:100%; font-size:.9rem; }
+  th, td { text-align:left; padding:.6rem .7rem; border-bottom:1px solid var(--line);
+           white-space:nowrap; }
+  th { color:var(--muted); font-weight:500; font-size:.8rem;
+       text-transform:uppercase; letter-spacing:.03em; }
+  .role { font-weight:600; }
+  .primary { color:var(--ok); } .standby { color:var(--fg); }
+  .witness { color:var(--muted); }
+  .down, .unreachable { color:var(--bad); }
+  .note { margin-top:1rem; padding:.7rem .9rem; border-radius:6px;
+          background:var(--card); border:1px solid var(--line);
+          color:var(--muted); font-size:.85rem; }
+  .alert { border-color:var(--bad); color:var(--bad); }
+  .err { color:var(--bad); font-size:.8rem; white-space:normal; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Supabase high availability</h1>
+  <p class="sub" id="sub">Loading…</p>
+
+  <div class="bar">
+    <input id="token" type="password" placeholder="API token (needed to promote)">
+    <button id="save">Remember</button>
+    <button id="refresh">Refresh</button>
+  </div>
+
+  <div class="wrap">
+    <table>
+      <thead><tr>
+        <th>Node</th><th>Role</th><th>Replication</th><th>Lag</th><th></th>
+      </tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+
+  <div id="notice"></div>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const tokenBox = $("token");
+tokenBox.value = sessionStorage.getItem("ha_token") || "";
+
+$("save").onclick = () => {
+  sessionStorage.setItem("ha_token", tokenBox.value);
+  $("save").textContent = "Saved";
+  setTimeout(() => ($("save").textContent = "Remember"), 1200);
+};
+$("refresh").onclick = load;
+
+function lagText(n) {
+  if (n.role !== "standby") return "—";
+  const s = n.lag_seconds, b = n.lag_bytes;
+  if (s === undefined) return "—";
+  return s + " s / " + (b ?? "?") + " B";
+}
+
+function replicationText(n) {
+  if (n.role === "primary") {
+    const r = n.replicas || [];
+    if (!r.length) return "no standby connected";
+    return r.length + " streaming";
+  }
+  if (n.role === "standby") return n.streaming ? "streaming" : "not streaming";
+  return "—";
+}
+
+async function promote(url, name) {
+  const token = tokenBox.value.trim();
+  if (!token) { alert("Enter the API token first."); return; }
+  const msg = "Promote " + name + " to primary?\\n\\n" +
+              "Only do this when the current primary is really gone. Two " +
+              "primaries taking writes at once will diverge, and that cannot " +
+              "be merged back.";
+  if (!confirm(msg)) return;
+  const res = await fetch("cluster/promote?target=" + encodeURIComponent(url), {
+    method: "POST", headers: { "Authorization": "Bearer " + token },
+  });
+  if (!res.ok) alert("Promotion failed: " + res.status + " " + (await res.text()));
+  load();
+}
+
+async function load() {
+  let data;
+  try {
+    data = await (await fetch("cluster")).json();
+  } catch (e) {
+    $("sub").textContent = "Cannot reach this agent.";
+    return;
+  }
+  const rows = $("rows");
+  rows.innerHTML = "";
+  for (const n of data.nodes) {
+    const tr = document.createElement("tr");
+
+    const name = document.createElement("td");
+    name.textContent = n.node || "?";
+    if (n.is_self) name.textContent += " (this agent)";
+
+    const role = document.createElement("td");
+    role.className = "role " + (n.role || "");
+    role.textContent = n.role || "?";
+
+    const rep = document.createElement("td");
+    rep.textContent = replicationText(n);
+
+    const lag = document.createElement("td");
+    lag.textContent = lagText(n);
+
+    const act = document.createElement("td");
+    if (n.role === "standby" && !n.is_self && n.agent_url !== "self") {
+      const b = document.createElement("button");
+      b.textContent = "Promote";
+      b.onclick = () => promote(n.agent_url, n.node);
+      act.appendChild(b);
+    }
+
+    tr.append(name, role, rep, lag, act);
+    rows.appendChild(tr);
+
+    if (n.error || n.last_error) {
+      const errRow = document.createElement("tr");
+      const td = document.createElement("td");
+      td.colSpan = 5;
+      td.className = "err";
+      td.textContent = n.error || n.last_error;
+      errRow.appendChild(td);
+      rows.appendChild(errRow);
+    }
+  }
+
+  $("sub").textContent = data.nodes.length + " node(s) · updated " +
+                         new Date().toLocaleTimeString();
+
+  const notice = $("notice");
+  notice.innerHTML = "";
+  const div = document.createElement("div");
+  if (data.split_brain) {
+    div.className = "note alert";
+    div.textContent = "Two nodes report being primary. Writes may be going to " +
+      "both and will diverge. Stop one of them now, then rebuild it as a standby.";
+  } else if (data.primary_count === 0) {
+    div.className = "note alert";
+    div.textContent = "No node reports being primary. Writes are failing.";
+  } else {
+    div.className = "note";
+    div.textContent = "Promoting is deliberately manual here. Automatic " +
+      "failover, where configured, is decided by the standby together with its " +
+      "witnesses.";
+  }
+  notice.appendChild(div);
+}
+
+load();
+setInterval(load, 5000);
+</script>
+</body>
+</html>
+"""
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -463,6 +698,14 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_html(self, code: int, html: str) -> None:
+        body = html.encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def _authorized(self) -> bool:
         expected = f"Bearer {self.cfg.token}"
         provided = self.headers.get("Authorization", "")
@@ -477,9 +720,19 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802 (stdlib naming)
         route = urllib.parse.urlparse(self.path)
         path = route.path.rstrip("/") or "/"
+
+        # Served before touching Postgres — the overview has to load even when
+        # the local database is the thing that is broken.
+        if path == "/":
+            self._send_html(200, DASHBOARD_HTML)
+            return
+        if path == "/cluster":
+            self._send(200, build_cluster(self.cfg, self.node, self.supervisor))
+            return
+
         status = build_status(self.cfg, self.node, self.supervisor)
 
-        if path in ("/health", "/status", "/"):
+        if path in ("/health", "/status"):
             self._send(200, status)
         elif path == "/primary":
             ok = status.get("role") == "primary"
@@ -493,7 +746,11 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, {"error": "not found"})
 
     def do_POST(self) -> None:  # noqa: N802
-        path = urllib.parse.urlparse(self.path).path.rstrip("/") or "/"
+        route = urllib.parse.urlparse(self.path)
+        path = route.path.rstrip("/") or "/"
+        if path == "/cluster/promote":
+            self._handle_cluster_promote(route.query)
+            return
         if path != "/promote":
             self._send(404, {"error": "not found"})
             return
@@ -511,6 +768,33 @@ class Handler(BaseHTTPRequestHandler):
             200 if promoted else 500,
             {"promoted": promoted, **build_status(self.cfg, self.node, self.supervisor)},
         )
+
+    def _handle_cluster_promote(self, query: str) -> None:
+        """Forwards a promotion to another agent on behalf of the overview page.
+
+        A browser cannot call an agent on another server directly, so this
+        relays the call. The target must be one of the configured peers —
+        without that check this would forward authenticated requests to any
+        address a caller names.
+        """
+        if not self._authorized():
+            return
+        target = (urllib.parse.parse_qs(query).get("target") or [""])[0].rstrip("/")
+        if target not in self.cfg.peer_urls:
+            self._send(400, {"error": "target is not a configured peer"})
+            return
+        req = urllib.request.Request(
+            f"{target}/promote",
+            method="POST",
+            headers={"Authorization": f"Bearer {self.cfg.token}"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=70) as resp:
+                self._send(resp.status, json.load(resp))
+        except urllib.error.HTTPError as exc:
+            self._send(exc.code, {"error": exc.reason})
+        except (urllib.error.URLError, OSError, ValueError) as exc:
+            self._send(502, {"error": f"could not reach {target}: {exc}"})
 
     def _handle_can_reach(self, query: str) -> None:
         """Witness probe — reports whether this node can see another node."""

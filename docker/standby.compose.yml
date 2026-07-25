@@ -116,6 +116,10 @@ services:
       HA_FAILURE_THRESHOLD: ${HA_FAILURE_THRESHOLD:-3}
       HA_MAX_LAG_BYTES: ${HA_MAX_LAG_BYTES:-0}
       HA_LOG_LEVEL: ${HA_LOG_LEVEL:-INFO}
+      # The other agents in this group, so this node's overview page on port
+      # 8008 shows the whole picture — useful precisely when the primary is
+      # the thing that is down.
+      HA_PEERS: ${HA_PEERS:-}
     ports:
       - ${HA_AGENT_PORT:-8008}:8008
 

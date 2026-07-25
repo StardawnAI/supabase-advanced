@@ -204,6 +204,38 @@ to automate.
 
 ---
 
+## The overview page
+
+Every agent serves a status page on its own port:
+
+```
+http://<any-server>:8008/
+```
+
+It lists every node in the group with its role, replication state and lag,
+refreshes itself, and offers a promote button for standbys. Paste the API token
+into the field at the top to enable promoting; it is kept in the browser tab
+only.
+
+Two things it deliberately calls out: **no node is primary** (writes are
+failing) and **two nodes are primary** (a split brain — writes are going to both
+and will diverge). The second will not resolve itself; stop one node and rebuild
+it as a standby.
+
+The page is served by the agent itself rather than built into Studio. That keeps
+it working when the database it reports on is down, keeps it reachable on every
+node including a standby whose primary has vanished, and keeps this feature out
+of the Studio codebase — which matters for a fork that regularly pulls thousands
+of upstream commits.
+
+Because a browser cannot call an agent on another server directly, promotions
+from the page are relayed by the agent you have open. It only relays to nodes in
+its own `HA_PEERS` list.
+
+Keep port 8008 off the public internet. The page needs no token to *read*
+status, on purpose: the router polls the same endpoints, and a status page that
+cannot load during an incident is useless.
+
 ## Operating
 
 | Command | Does |
