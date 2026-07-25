@@ -42,16 +42,21 @@ if [ -f "$PGDATA/PG_VERSION" ]; then
     exit 0
 fi
 
-# Waits for a real replication connection rather than a plain pg_isready.
-# pg_isready only proves the server is listening; it says nothing about the
-# replication role or the pg_hba rule. The primary also applies a reloaded
-# pg_hba.conf asynchronously, so a rule added moments ago may not be live yet.
+# Waits for the exact kind of connection pg_basebackup will make.
+#
+# pg_isready only proves the server is listening, and a logical connection
+# (replication=database) proves nothing either: Postgres matches those against
+# ordinary `host all all` rules, which most setups already have. Only
+# replication=true is matched against the `host replication` rule this clone
+# depends on. Checking the wrong one reports success and then fails the clone.
+# The primary also applies a reloaded pg_hba.conf asynchronously, so a rule
+# added moments ago may not be live yet.
 info "waiting for primary ${PRIMARY_HOST}:${PRIMARY_PORT} to accept replication (up to ${TIMEOUT}s)"
 waited=0
 while :; do
     # Keeps stderr (the reason it failed) and discards the result row.
     if last_error=$(PGPASSWORD="$REPL_PASSWORD" psql \
-            "postgresql://${REPL_USER}@${PRIMARY_HOST}:${PRIMARY_PORT}/postgres?replication=database" \
+            "postgresql://${REPL_USER}@${PRIMARY_HOST}:${PRIMARY_PORT}/postgres?replication=true" \
             -X -A -t -c "IDENTIFY_SYSTEM" 2>&1 >/dev/null); then
         break
     fi

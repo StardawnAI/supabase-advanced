@@ -104,11 +104,13 @@ echo "==> Verifying"
 # A reloaded pg_hba.conf is applied asynchronously, so poll instead of assuming.
 # The connection goes over TCP to the service name, which is what a remote
 # standby does — connecting over localhost would hit a different, laxer rule.
+# replication=true is the physical kind pg_basebackup uses, and the only kind
+# matched against the `host replication` rule added above.
 verified=false
 attempt=0
 while [ "$attempt" -lt 10 ]; do
     if docker compose exec -T -e PGPASSWORD="$REPL_PASSWORD" "$DB_SERVICE" psql \
-        "postgresql://${REPL_USER}@${DB_SERVICE}:${POSTGRES_PORT:-5432}/postgres?replication=database" \
+        "postgresql://${REPL_USER}@${DB_SERVICE}:${POSTGRES_PORT:-5432}/postgres?replication=true" \
         -X -A -t -c "IDENTIFY_SYSTEM" >/dev/null 2>&1; then
         verified=true
         break

@@ -64,12 +64,14 @@ sql_via_router() { # port statement
         -v ON_ERROR_STOP=1 -c "$*" 2>/dev/null | tr -d '\r' | head -n1
 }
 
-# True once the primary actually accepts a replication connection.
-# pg_reload_conf() returns before the postmaster has processed the signal, so
-# the only reliable check is to open the kind of connection the clone needs.
+# True once the primary accepts the physical replication connection a clone
+# makes. pg_reload_conf() returns before the postmaster has applied the new
+# pg_hba.conf, so this has to be polled. replication=true matters: a logical
+# connection (replication=database) is matched against ordinary `host all all`
+# rules and would pass while the clone still fails.
 replication_ready() {
     dc exec -T -e PGPASSWORD="$REPL_PASSWORD" client \
-        psql "postgresql://$REPL_USER@primary-db:5432/postgres?replication=database" \
+        psql "postgresql://$REPL_USER@primary-db:5432/postgres?replication=true" \
         -X -A -t -c "IDENTIFY_SYSTEM" >/dev/null 2>&1
 }
 
