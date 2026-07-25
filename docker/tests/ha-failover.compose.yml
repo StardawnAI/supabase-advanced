@@ -121,6 +121,11 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+      # HAProxy tries to resolve every node at startup, twice (config check and
+      # load). With a node that is not up yet each attempt burns the resolver
+      # timeout, so binding can take ~20s. Without this grace period the checks
+      # run out before it ever listens.
+      start_period: 45s
 
   # Drives the test from inside the network, the way an application would.
   client:

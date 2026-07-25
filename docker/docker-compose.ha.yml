@@ -63,6 +63,10 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+      # HAProxy resolves every node at startup, twice. Nodes on other servers
+      # that are down or slow to answer each cost a resolver timeout, so give
+      # it room to bind before the checks start counting.
+      start_period: 45s
     ports:
       # Read-only endpoint spread across caught-up standbys.
       - ${HA_ROUTER_READ_PORT:-5433}:5433
