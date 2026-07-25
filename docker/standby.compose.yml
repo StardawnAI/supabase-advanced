@@ -73,7 +73,13 @@ services:
         "-c",
         "config_file=/etc/postgresql/postgresql.conf",
         "-c",
-        "log_min_messages=fatal"
+        "log_min_messages=fatal",
+        # The image ships hot_standby=off, under which a node in recovery
+        # refuses every connection: no reads, no health check, and no way for
+        # the agent to see its own role. It only takes effect at startup, and
+        # is ignored once this node is promoted.
+        "-c",
+        "hot_standby=on"
       ]
     ports:
       # The primary's router probes this node here, and it becomes the write

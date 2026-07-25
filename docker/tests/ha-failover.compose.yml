@@ -76,6 +76,11 @@ services:
       - standby-data:/var/lib/postgresql/data
     depends_on:
       standby-bootstrap: {condition: service_completed_successfully}
+    # The image ships hot_standby=off, under which a node in recovery refuses
+    # every connection — no reads, no health check, no role query.
+    command:
+      ["postgres", "-c", "config_file=/etc/postgresql/postgresql.conf",
+       "-c", "hot_standby=on"]
 
   standby-agent:
     build: ../ha
