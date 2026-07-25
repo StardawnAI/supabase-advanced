@@ -47,31 +47,48 @@ serving writes — two primaries, diverging data.
 Mitigation implemented here:
 - `HA_FAILOVER_MODE=manual` (default) — agent alarms, promotion is one click.
 - `HA_FAILOVER_MODE=auto` — requires `HA_WITNESS_URLS`: the standby only
-  promotes if an independent third party also cannot see the primary.
-- Fencing: on promotion the agent drops the old primary out of the router
-  before accepting writes.
+  promotes if an independent third party also cannot see the primary. Without
+  witnesses configured it refuses to promote at all.
+- The router treats the first node in `HA_NODES` as preferred and the rest as
+  backups, so if two nodes ever claim to be primary, traffic stays with the
+  original one instead of flapping.
+- The overview page reports a split brain when more than one node claims to be
+  primary. It cannot be fenced automatically across a partition — that is the
+  nature of the problem — so it is made visible instead.
 
 ## Checklist
 
 - [x] 1. Sync fork to upstream → verify: `git rev-list --count upstream/master...HEAD` = 0
 - [x] 2. `docs/PLAN.md` + `docs/STATUS.md`
-- [ ] 3. `docker/ha/agent.py` — role/health/lag endpoints, promote, witness quorum
-      → verify: unit-testable pure logic + live endpoint returns 200/503 correctly
-- [ ] 4. `docker/ha/bootstrap-standby.sh` — pg_basebackup, slot, pgsodium key copy
-      → verify: standby comes up in recovery and streams
-- [ ] 5. `docker/ha/haproxy.cfg` — router with httpchk `/primary`
-      → verify: `haproxy -c -f` passes; routes to primary only
-- [ ] 6. `docker/docker-compose.ha.yml` (primary side) + `docker-compose.replica.yml` (standby side)
-      → verify: `docker compose config` resolves
-- [ ] 7. `docker/ha/setup-primary.sh` — replication role, pg_hba, slot
-      → verify: `pg_stat_replication` shows the standby streaming
-- [ ] 8. `run.sh ha …` commands (status, promote, replicas)
-      → verify: `sh -n run.sh` + live run
-- [ ] 9. Live two-node test: write on A → read on B; kill A → B promotes; router follows
-      → verify: transcript of the run (this is the proof of done)
-- [ ] 10. Studio UI: High Availability page (nodes, lag, promote button)
-      → verify: typecheck + unit test
-- [ ] 11. Docs: `docker/ha/README.md` + self-hosting guide page
+- [x] 3. `docker/ha/agent.py` — role/health/lag endpoints, promote, witness quorum
+      → 37 unit tests pass; live endpoints return 200/503 per role
+- [x] 4. `docker/ha/bootstrap-standby.sh` — pg_basebackup, slot, pgsodium key warning
+      → standby comes up in recovery and streams (lag 0.27s)
+- [x] 5. `docker/ha/render-haproxy.sh` — router with httpchk `/primary`
+      → `haproxy -c -f` passes; only the primary receives writes
+- [x] 6. `docker/docker-compose.ha.yml` (primary) + `docker/standby.compose.yml` (standby)
+      → `docker compose config` resolves; both run in the live test
+- [x] 7. `docker/ha/setup-primary.sh` — replication role, pg_hba, verification
+      → `pg_stat_replication` shows the standby streaming
+- [x] 8. `run.sh ha …` commands (init, status, promote, nodes, keys)
+      → `sh -n` clean; promote exercised end to end in the manual-mode run
+- [x] 9. Live two-node test: write on A → read on B; kill A → B promotes; router follows
+      → **auto 26/26, manual 27/27.** Promotion 6s after the kill, router 0s,
+        no committed row lost. Split-brain detection confirmed by restarting
+        the old primary.
+- [x] 10. Overview page (nodes, lag, promote button) — served by the agent
+      rather than built into Studio, see Deviations below
+- [x] 11. Docs: `docker/ha/README.md` + `.env.example` section
+
+## Deviations from the original plan
+
+**The overview page is served by the agent, not built into Studio.** Three
+reasons: it keeps working when the database it reports on is down; it is
+reachable on every node, including a standby whose primary has vanished; and it
+keeps this feature out of a Studio codebase that this fork pulls thousands of
+upstream commits into at a time. A page inside Studio is still possible on top
+of this — the agents expose plain JSON — but it would mean carrying Studio
+patches across every sync.
 
 ## Non-goals (explicit)
 
