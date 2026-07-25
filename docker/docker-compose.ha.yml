@@ -56,6 +56,13 @@ services:
       HA_ROUTER_STATS_PORT: 8404
       HA_ROUTER_CHECK_INTERVAL: ${HA_ROUTER_CHECK_INTERVAL:-2s}
       HA_ROUTER_CHECK_FALL: ${HA_ROUTER_CHECK_FALL:-2}
+    healthcheck:
+      # The stats endpoint answering means the router is up and routing;
+      # `run.sh start` uses `up --wait`, which needs a check to wait on.
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8404/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     ports:
       # Read-only endpoint spread across caught-up standbys.
       - ${HA_ROUTER_READ_PORT:-5433}:5433

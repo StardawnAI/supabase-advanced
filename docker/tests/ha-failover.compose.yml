@@ -116,15 +116,24 @@ services:
       HA_ROUTER_READ_PORT: 5433
       HA_ROUTER_CHECK_INTERVAL: 1s
       HA_ROUTER_CHECK_FALL: 2
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8404/"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
 
   # Drives the test from inside the network, the way an application would.
   client:
     image: ${HA_TEST_IMAGE:-supabase/postgres:17.6.1.136}
     entrypoint: ["sleep", "infinity"]
-    # The image ships a Postgres healthcheck; this container runs no server, so
-    # it would never report healthy and `up --wait` would block on it.
+    # The image ships a Postgres healthcheck, but this container runs no server
+    # and would never report healthy. It is only a psql shell, so being up is
+    # the whole of its health — and `up --wait` needs *some* check to look at.
     healthcheck:
-      disable: true
+      test: ["CMD", "true"]
+      interval: 5s
+      timeout: 3s
+      retries: 2
 
 volumes:
   primary-data:
