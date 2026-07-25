@@ -88,6 +88,22 @@ except Exception:
 ' "$1" 2>/dev/null | tr -d '\r' | head -n1
 }
 
+# Promotes a node through its agent — the same call `run.sh ha promote` makes,
+# token and all, rather than reaching into Postgres directly.
+agent_promote() { # host
+    dc exec -T witness python3 -c '
+import sys, urllib.request, urllib.error
+req = urllib.request.Request(sys.argv[1], method="POST",
+                             headers={"Authorization": "Bearer " + sys.argv[2]})
+try:
+    print(urllib.request.urlopen(req, timeout=70).status)
+except urllib.error.HTTPError as exc:
+    print(exc.code)
+except Exception:
+    print(0)
+' "http://$1:8008/promote" "${HA_TEST_TOKEN:-testtoken}" 2>/dev/null | tr -d '\r' | head -n1
+}
+
 # Polls a shell condition until it holds or the deadline passes.
 wait_for() { # description seconds condition...
     desc="$1"
@@ -220,8 +236,11 @@ else
     step "Manual mode: the standby must NOT promote itself"
     sleep 25
     check_eq "standby is still a standby" "t" "$(sql standby-db 'SELECT pg_is_in_recovery()')"
-    echo "  promoting it by hand, the way an operator would"
-    sql standby-db 'SELECT pg_promote(wait := true, wait_seconds := 60)' >/dev/null
+    check_eq "an unauthenticated promote is refused" "401" \
+        "$(HA_TEST_TOKEN=wrong-token agent_promote standby-db)"
+    check_eq "standby is still a standby after that" "t" "$(sql standby-db 'SELECT pg_is_in_recovery()')"
+    echo "  promoting it through the agent, the way an operator would"
+    check_eq "the operator's promote succeeded" "200" "$(agent_promote standby-db)"
 fi
 
 check_eq "the new primary accepts writes" "f" "$(sql standby-db 'SELECT pg_is_in_recovery()')"
