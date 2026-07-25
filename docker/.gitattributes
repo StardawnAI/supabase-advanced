@@ -6,6 +6,7 @@
 .env.example eol=lf
 
 *.sh eol=lf
+*.py eol=lf
 *.sql eol=lf
 *.yml eol=lf
 *.yaml eol=lf

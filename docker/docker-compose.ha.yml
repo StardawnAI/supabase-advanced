@@ -1,0 +1,71 @@
+# High availability overlay for the primary server.
+#
+# Adds two things to the stack:
+#   pg-router   every service reaches Postgres through it, so a failover is
+#               invisible to auth/rest/realtime/storage/meta/functions/pooler
+#   ha-agent    reports this node's role and lag; the router probes it
+#
+# Enable with:
+#   sh run.sh config add ha
+#   sh run.sh ha init            # sets POSTGRES_HOST=pg-router and a token
+#   sh run.sh start
+#
+# The router only does its job when POSTGRES_HOST points at it — `ha init`
+# takes care of that. Without it the stack still runs, but talks to db
+# directly and will not fail over.
+
+services:
+  ha-agent:
+    container_name: supabase-ha-agent
+    build:
+      context: ./ha
+    restart: unless-stopped
+    environment:
+      HA_NODE_NAME: ${HA_NODE_NAME:-node-a}
+      HA_PG_HOST: db
+      HA_PG_PORT: ${POSTGRES_PORT}
+      HA_PG_USER: postgres
+      HA_PG_PASSWORD: ${POSTGRES_PASSWORD}
+      HA_PG_DATABASE: ${POSTGRES_DB}
+      HA_API_TOKEN: ${HA_API_TOKEN}
+      # A primary has no upstream to supervise, so no failover mode applies
+      # here. This node simply reports that it is the primary.
+      HA_MAX_LAG_BYTES: ${HA_MAX_LAG_BYTES:-0}
+      HA_LOG_LEVEL: ${HA_LOG_LEVEL:-INFO}
+    ports:
+      # Published so standbys and witnesses on other servers can probe it.
+      - ${HA_AGENT_PORT:-8008}:8008
+    depends_on:
+      db:
+        condition: service_healthy
+
+  pg-router:
+    container_name: supabase-pg-router
+    image: haproxy:3.0-alpine
+    restart: unless-stopped
+    volumes:
+      - ./ha/render-haproxy.sh:/usr/local/bin/render-haproxy.sh:ro
+    entrypoint: ["/bin/sh", "/usr/local/bin/render-haproxy.sh"]
+    environment:
+      # name=host:pgport:agentport, first entry is the preferred primary.
+      # Standbys on other servers are added with their public address, e.g.
+      #   HA_NODES=node-a=db:5432:8008,node-b=10.0.0.2:5434:8008
+      HA_NODES: ${HA_NODES:-node-a=db:5432:8008}
+      HA_ROUTER_PORT: ${POSTGRES_PORT}
+      HA_ROUTER_READ_PORT: 5433
+      HA_ROUTER_STATS_PORT: 8404
+      HA_ROUTER_CHECK_INTERVAL: ${HA_ROUTER_CHECK_INTERVAL:-2s}
+      HA_ROUTER_CHECK_FALL: ${HA_ROUTER_CHECK_FALL:-2}
+    ports:
+      # Read-only endpoint spread across caught-up standbys.
+      - ${HA_ROUTER_READ_PORT:-5433}:5433
+      - ${HA_ROUTER_STATS_PORT:-8404}:8404
+    depends_on:
+      ha-agent:
+        condition: service_started
+
+  db:
+    ports:
+      # Standbys on other servers connect here to stream WAL. Keep this port
+      # on a private network or VPN — it is a direct line to Postgres.
+      - ${HA_DB_REPLICATION_PORT:-5434}:${POSTGRES_PORT}
