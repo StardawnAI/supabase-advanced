@@ -1,0 +1,31 @@
+# Runs this fork's own Studio image instead of the published upstream one.
+#
+# Needed for ANY change this fork makes to apps/studio — including the
+# "Standby servers" page. The upstream self-hosted stack pins a prebuilt image
+# (docker/docker-compose.yml: `image: supabase/studio:...`), so source changes
+# in this repo reach nothing until you build and publish your own.
+#
+# Enable with:
+#   sh run.sh config add studio-fork
+#   sh run.sh recreate studio
+#
+# It is a separate overlay rather than an edit to docker-compose.yml on
+# purpose: upstream bumps that image tag roughly monthly, and editing the line
+# directly would produce a merge conflict every single time.
+#
+# Build and publish the image with the "Build Studio image" workflow, or
+# locally from the repository root:
+#   docker build . -f apps/studio/Dockerfile --target production \
+#     -t <your-registry>/supabase-advanced-studio:<tag>
+#
+# Expect a slow first build — upstream allows two hours per architecture for
+# the equivalent job.
+
+services:
+  studio:
+    image: ${STUDIO_FORK_IMAGE:?set STUDIO_FORK_IMAGE to your own Studio image, e.g. registry.example.com/supabase-advanced-studio:2026-07-26}
+    environment:
+      # Where Studio reads standby status from, server-side. The agent is on
+      # the compose network, so the default works unmodified when the ha
+      # overlay is active; the browser never contacts it directly.
+      HA_AGENT_URL: ${HA_AGENT_URL:-http://ha-agent:8008}

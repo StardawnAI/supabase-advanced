@@ -73,6 +73,7 @@ import { Route as IntegrationsVercelInstallRouteImport } from './routes/integrat
 import { Route as IntegrationsGithubAuthorizeRouteImport } from './routes/integrations/github/authorize'
 import { Route as ApiPlatformDeploymentModeRouteImport } from './routes/api/platform/deployment-mode'
 import { Route as ApiIntegrationsStripeSyncRouteImport } from './routes/api/integrations/stripe-sync'
+import { Route as ApiHaClusterRouteImport } from './routes/api/ha/cluster'
 import { Route as ApiEdgeFunctionsTestRouteImport } from './routes/api/edge-functions/test'
 import { Route as ApiContentGraphqlRouteImport } from './routes/api/content/graphql'
 import { Route as ApiAiDocsRouteImport } from './routes/api/ai/docs'
@@ -99,6 +100,7 @@ import { Route as ProjectRefStorageS3RouteImport } from './routes/project/$ref/s
 import { Route as ProjectRefSqlTemplatesRouteImport } from './routes/project/$ref/sql/templates'
 import { Route as ProjectRefSqlExamplesRouteImport } from './routes/project/$ref/sql/examples'
 import { Route as ProjectRefSqlIdRouteImport } from './routes/project/$ref/sql/$id'
+import { Route as ProjectRefSettingsStandbyServersRouteImport } from './routes/project/$ref/settings/standby-servers'
 import { Route as ProjectRefSettingsLogDrainsRouteImport } from './routes/project/$ref/settings/log-drains'
 import { Route as ProjectRefSettingsIntegrationsRouteImport } from './routes/project/$ref/settings/integrations'
 import { Route as ProjectRefSettingsInfrastructureRouteImport } from './routes/project/$ref/settings/infrastructure'
@@ -643,6 +645,11 @@ const ApiIntegrationsStripeSyncRoute =
     path: '/api/integrations/stripe-sync',
     getParentRoute: () => rootRouteImport,
   } as any)
+const ApiHaClusterRoute = ApiHaClusterRouteImport.update({
+  id: '/api/ha/cluster',
+  path: '/api/ha/cluster',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiEdgeFunctionsTestRoute = ApiEdgeFunctionsTestRouteImport.update({
   id: '/api/edge-functions/test',
   path: '/api/edge-functions/test',
@@ -778,6 +785,12 @@ const ProjectRefSqlIdRoute = ProjectRefSqlIdRouteImport.update({
   path: '/$id',
   getParentRoute: () => ProjectRefSqlRoute,
 } as any)
+const ProjectRefSettingsStandbyServersRoute =
+  ProjectRefSettingsStandbyServersRouteImport.update({
+    id: '/standby-servers',
+    path: '/standby-servers',
+    getParentRoute: () => ProjectRefSettingsRoute,
+  } as any)
 const ProjectRefSettingsLogDrainsRoute =
   ProjectRefSettingsLogDrainsRouteImport.update({
     id: '/log-drains',
@@ -2082,6 +2095,7 @@ export interface FileRoutesByFullPath {
   '/api/ai/docs': typeof ApiAiDocsRoute
   '/api/content/graphql': typeof ApiContentGraphqlRoute
   '/api/edge-functions/test': typeof ApiEdgeFunctionsTestRoute
+  '/api/ha/cluster': typeof ApiHaClusterRoute
   '/api/integrations/stripe-sync': typeof ApiIntegrationsStripeSyncRoute
   '/api/platform/deployment-mode': typeof ApiPlatformDeploymentModeRoute
   '/integrations/github/authorize': typeof IntegrationsGithubAuthorizeRoute
@@ -2205,6 +2219,7 @@ export interface FileRoutesByFullPath {
   '/project/$ref/settings/infrastructure': typeof ProjectRefSettingsInfrastructureRoute
   '/project/$ref/settings/integrations': typeof ProjectRefSettingsIntegrationsRoute
   '/project/$ref/settings/log-drains': typeof ProjectRefSettingsLogDrainsRoute
+  '/project/$ref/settings/standby-servers': typeof ProjectRefSettingsStandbyServersRoute
   '/project/$ref/sql/$id': typeof ProjectRefSqlIdRoute
   '/project/$ref/sql/examples': typeof ProjectRefSqlExamplesRoute
   '/project/$ref/sql/templates': typeof ProjectRefSqlTemplatesRoute
@@ -2387,6 +2402,7 @@ export interface FileRoutesByTo {
   '/api/ai/docs': typeof ApiAiDocsRoute
   '/api/content/graphql': typeof ApiContentGraphqlRoute
   '/api/edge-functions/test': typeof ApiEdgeFunctionsTestRoute
+  '/api/ha/cluster': typeof ApiHaClusterRoute
   '/api/integrations/stripe-sync': typeof ApiIntegrationsStripeSyncRoute
   '/api/platform/deployment-mode': typeof ApiPlatformDeploymentModeRoute
   '/integrations/github/authorize': typeof IntegrationsGithubAuthorizeRoute
@@ -2500,6 +2516,7 @@ export interface FileRoutesByTo {
   '/project/$ref/settings/infrastructure': typeof ProjectRefSettingsInfrastructureRoute
   '/project/$ref/settings/integrations': typeof ProjectRefSettingsIntegrationsRoute
   '/project/$ref/settings/log-drains': typeof ProjectRefSettingsLogDrainsRoute
+  '/project/$ref/settings/standby-servers': typeof ProjectRefSettingsStandbyServersRoute
   '/project/$ref/sql/$id': typeof ProjectRefSqlIdRoute
   '/project/$ref/sql/examples': typeof ProjectRefSqlExamplesRoute
   '/project/$ref/sql/templates': typeof ProjectRefSqlTemplatesRoute
@@ -2687,6 +2704,7 @@ export interface FileRoutesById {
   '/api/ai/docs': typeof ApiAiDocsRoute
   '/api/content/graphql': typeof ApiContentGraphqlRoute
   '/api/edge-functions/test': typeof ApiEdgeFunctionsTestRoute
+  '/api/ha/cluster': typeof ApiHaClusterRoute
   '/api/integrations/stripe-sync': typeof ApiIntegrationsStripeSyncRoute
   '/api/platform/deployment-mode': typeof ApiPlatformDeploymentModeRoute
   '/integrations/github/authorize': typeof IntegrationsGithubAuthorizeRoute
@@ -2810,6 +2828,7 @@ export interface FileRoutesById {
   '/project/$ref/settings/infrastructure': typeof ProjectRefSettingsInfrastructureRoute
   '/project/$ref/settings/integrations': typeof ProjectRefSettingsIntegrationsRoute
   '/project/$ref/settings/log-drains': typeof ProjectRefSettingsLogDrainsRoute
+  '/project/$ref/settings/standby-servers': typeof ProjectRefSettingsStandbyServersRoute
   '/project/$ref/sql/$id': typeof ProjectRefSqlIdRoute
   '/project/$ref/sql/examples': typeof ProjectRefSqlExamplesRoute
   '/project/$ref/sql/templates': typeof ProjectRefSqlTemplatesRoute
@@ -2996,6 +3015,7 @@ export interface FileRouteTypes {
     | '/api/ai/docs'
     | '/api/content/graphql'
     | '/api/edge-functions/test'
+    | '/api/ha/cluster'
     | '/api/integrations/stripe-sync'
     | '/api/platform/deployment-mode'
     | '/integrations/github/authorize'
@@ -3119,6 +3139,7 @@ export interface FileRouteTypes {
     | '/project/$ref/settings/infrastructure'
     | '/project/$ref/settings/integrations'
     | '/project/$ref/settings/log-drains'
+    | '/project/$ref/settings/standby-servers'
     | '/project/$ref/sql/$id'
     | '/project/$ref/sql/examples'
     | '/project/$ref/sql/templates'
@@ -3301,6 +3322,7 @@ export interface FileRouteTypes {
     | '/api/ai/docs'
     | '/api/content/graphql'
     | '/api/edge-functions/test'
+    | '/api/ha/cluster'
     | '/api/integrations/stripe-sync'
     | '/api/platform/deployment-mode'
     | '/integrations/github/authorize'
@@ -3414,6 +3436,7 @@ export interface FileRouteTypes {
     | '/project/$ref/settings/infrastructure'
     | '/project/$ref/settings/integrations'
     | '/project/$ref/settings/log-drains'
+    | '/project/$ref/settings/standby-servers'
     | '/project/$ref/sql/$id'
     | '/project/$ref/sql/examples'
     | '/project/$ref/sql/templates'
@@ -3600,6 +3623,7 @@ export interface FileRouteTypes {
     | '/api/ai/docs'
     | '/api/content/graphql'
     | '/api/edge-functions/test'
+    | '/api/ha/cluster'
     | '/api/integrations/stripe-sync'
     | '/api/platform/deployment-mode'
     | '/integrations/github/authorize'
@@ -3723,6 +3747,7 @@ export interface FileRouteTypes {
     | '/project/$ref/settings/infrastructure'
     | '/project/$ref/settings/integrations'
     | '/project/$ref/settings/log-drains'
+    | '/project/$ref/settings/standby-servers'
     | '/project/$ref/sql/$id'
     | '/project/$ref/sql/examples'
     | '/project/$ref/sql/templates'
@@ -3893,6 +3918,7 @@ export interface RootRouteChildren {
   ApiAiDocsRoute: typeof ApiAiDocsRoute
   ApiContentGraphqlRoute: typeof ApiContentGraphqlRoute
   ApiEdgeFunctionsTestRoute: typeof ApiEdgeFunctionsTestRoute
+  ApiHaClusterRoute: typeof ApiHaClusterRoute
   ApiIntegrationsStripeSyncRoute: typeof ApiIntegrationsStripeSyncRoute
   ApiPlatformDeploymentModeRoute: typeof ApiPlatformDeploymentModeRoute
   IntegrationsGithubAuthorizeRoute: typeof IntegrationsGithubAuthorizeRoute
@@ -4433,6 +4459,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiIntegrationsStripeSyncRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/ha/cluster': {
+      id: '/api/ha/cluster'
+      path: '/api/ha/cluster'
+      fullPath: '/api/ha/cluster'
+      preLoaderRoute: typeof ApiHaClusterRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/edge-functions/test': {
       id: '/api/edge-functions/test'
       path: '/api/edge-functions/test'
@@ -4614,6 +4647,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/project/$ref/sql/$id'
       preLoaderRoute: typeof ProjectRefSqlIdRouteImport
       parentRoute: typeof ProjectRefSqlRoute
+    }
+    '/project/$ref/settings/standby-servers': {
+      id: '/project/$ref/settings/standby-servers'
+      path: '/standby-servers'
+      fullPath: '/project/$ref/settings/standby-servers'
+      preLoaderRoute: typeof ProjectRefSettingsStandbyServersRouteImport
+      parentRoute: typeof ProjectRefSettingsRoute
     }
     '/project/$ref/settings/log-drains': {
       id: '/project/$ref/settings/log-drains'
@@ -6656,6 +6696,7 @@ interface ProjectRefSettingsRouteChildren {
   ProjectRefSettingsInfrastructureRoute: typeof ProjectRefSettingsInfrastructureRoute
   ProjectRefSettingsIntegrationsRoute: typeof ProjectRefSettingsIntegrationsRoute
   ProjectRefSettingsLogDrainsRoute: typeof ProjectRefSettingsLogDrainsRoute
+  ProjectRefSettingsStandbyServersRoute: typeof ProjectRefSettingsStandbyServersRoute
   ProjectRefSettingsBillingUsageRoute: typeof ProjectRefSettingsBillingUsageRoute
   ProjectRefSettingsJwtLegacyRoute: typeof ProjectRefSettingsJwtLegacyRoute
   ProjectRefSettingsWebhooksEndpointIdRoute: typeof ProjectRefSettingsWebhooksEndpointIdRoute
@@ -6673,6 +6714,7 @@ const ProjectRefSettingsRouteChildren: ProjectRefSettingsRouteChildren = {
   ProjectRefSettingsInfrastructureRoute: ProjectRefSettingsInfrastructureRoute,
   ProjectRefSettingsIntegrationsRoute: ProjectRefSettingsIntegrationsRoute,
   ProjectRefSettingsLogDrainsRoute: ProjectRefSettingsLogDrainsRoute,
+  ProjectRefSettingsStandbyServersRoute: ProjectRefSettingsStandbyServersRoute,
   ProjectRefSettingsBillingUsageRoute: ProjectRefSettingsBillingUsageRoute,
   ProjectRefSettingsJwtLegacyRoute: ProjectRefSettingsJwtLegacyRoute,
   ProjectRefSettingsWebhooksEndpointIdRoute:
@@ -6846,6 +6888,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiAiDocsRoute: ApiAiDocsRoute,
   ApiContentGraphqlRoute: ApiContentGraphqlRoute,
   ApiEdgeFunctionsTestRoute: ApiEdgeFunctionsTestRoute,
+  ApiHaClusterRoute: ApiHaClusterRoute,
   ApiIntegrationsStripeSyncRoute: ApiIntegrationsStripeSyncRoute,
   ApiPlatformDeploymentModeRoute: ApiPlatformDeploymentModeRoute,
   IntegrationsGithubAuthorizeRoute: IntegrationsGithubAuthorizeRoute,

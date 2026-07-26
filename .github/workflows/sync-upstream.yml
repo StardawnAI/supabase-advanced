@@ -1,0 +1,170 @@
+# Pulls new work from supabase/supabase into this fork.
+#
+# Runs daily so each merge stays small. Small merges are the point: upstream
+# lands roughly a dozen commits a day, and a week's worth resolved at once is
+# far harder than a day's worth.
+#
+# It never force-pushes and never resolves a conflict on its own:
+#
+#   clean merge   -> checks the fork's own changes are still intact, then pushes
+#   conflict      -> pushes a branch and opens a pull request naming the files
+#   changes lost  -> pushes nothing and fails loudly
+#
+# The last case is the one worth having. `.github/fork/verify-intact.sh` asserts
+# that every file this fork owns still exists and that every hook it placed in
+# an upstream file is still there, so an upstream change can never quietly
+# delete our work — the sync stops and tells you instead.
+
+name: Sync fork with upstream
+
+on:
+  schedule:
+    # 04:12 UTC. Off the hour on purpose: scheduled jobs at :00 queue behind
+    # everyone else's.
+    - cron: '12 4 * * *'
+  workflow_dispatch:
+    inputs:
+      upstream_ref:
+        description: 'Upstream branch to merge'
+        required: false
+        default: 'master'
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPO: https://github.com/supabase/supabase.git
+  UPSTREAM_REF: ${{ inputs.upstream_ref || 'master' }}
+
+jobs:
+  sync:
+    name: Merge upstream
+    runs-on: ubuntu-latest
+    # Never run on the upstream repository itself, in case this file ever
+    # travels back there.
+    if: github.repository != 'supabase/supabase'
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Check out the fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Identify as the sync bot
+        run: |
+          git config user.name  'fork-sync[bot]'
+          git config user.email 'fork-sync[bot]@users.noreply.github.com'
+
+      - name: Fetch upstream
+        run: |
+          git remote add upstream "$UPSTREAM_REPO" 2>/dev/null || \
+            git remote set-url upstream "$UPSTREAM_REPO"
+          git fetch upstream "$UPSTREAM_REF" --tags --prune
+
+      - name: Check whether there is anything to merge
+        id: check
+        run: |
+          behind=$(git rev-list --count "HEAD..upstream/$UPSTREAM_REF")
+          ahead=$(git rev-list --count "upstream/$UPSTREAM_REF..HEAD")
+          echo "behind=$behind" >> "$GITHUB_OUTPUT"
+          echo "Behind upstream by $behind commit(s); ahead by $ahead."
+          if [ "$behind" -eq 0 ]; then
+            echo "Already up to date — nothing to do."
+          fi
+
+      - name: Try the merge
+        id: merge
+        if: steps.check.outputs.behind != '0'
+        run: |
+          if git merge --no-edit "upstream/$UPSTREAM_REF"; then
+            echo "conflict=false" >> "$GITHUB_OUTPUT"
+            echo "Merged cleanly."
+          else
+            echo "conflict=true" >> "$GITHUB_OUTPUT"
+            # Record what collided before undoing the merge, so the pull
+            # request can name the files instead of just saying "conflicts".
+            git diff --name-only --diff-filter=U > /tmp/conflicts.txt || true
+            echo "Conflicting files:"
+            cat /tmp/conflicts.txt
+            git merge --abort
+          fi
+
+      # Runs only on a clean merge. If this fails, nothing is pushed: the
+      # merge stays local to the runner and is thrown away with it.
+      - name: Verify the fork's own changes survived
+        if: steps.merge.outputs.conflict == 'false'
+        run: sh .github/fork/verify-intact.sh
+
+      - name: Push the merge
+        if: steps.merge.outputs.conflict == 'false'
+        run: |
+          git push origin HEAD:"${{ github.event.repository.default_branch }}"
+          echo "### Upstream merged cleanly" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Merged \`upstream/$UPSTREAM_REF\` and pushed. The fork's own files were verified present." >> "$GITHUB_STEP_SUMMARY"
+
+      # Conflicts are pushed as a branch and raised as a pull request, so they
+      # can be resolved with the normal review tools rather than in a log.
+      - name: Open a pull request for the conflict
+        if: steps.merge.outputs.conflict == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -eu
+          branch="sync/upstream-$(date -u +%Y-%m-%d)"
+
+          # One open sync PR at a time; a second would conflict with the first.
+          existing=$(gh pr list --state open --head "$branch" --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            echo "Pull request #$existing is already open for $branch — leaving it alone."
+            exit 0
+          fi
+
+          git checkout -B "$branch" "upstream/$UPSTREAM_REF"
+          git push --force-with-lease origin "$branch"
+
+          {
+            echo "Upstream has changes that touch the same lines as this fork's own."
+            echo "Merging them needs a human decision, so nothing was pushed to \`$DEFAULT_BRANCH\`."
+            echo ""
+            echo "### Files that collided"
+            echo ""
+            echo '```'
+            cat /tmp/conflicts.txt
+            echo '```'
+            echo ""
+            echo "### Resolving it"
+            echo ""
+            echo '```sh'
+            echo "git fetch origin && git checkout $DEFAULT_BRANCH"
+            echo "git merge origin/$branch"
+            echo "# resolve, keeping BOTH upstream's change and ours"
+            echo "sh .github/fork/verify-intact.sh   # proves nothing of ours was dropped"
+            echo "git push origin $DEFAULT_BRANCH"
+            echo '```'
+            echo ""
+            echo "Resolve toward keeping both sides. Discarding upstream's version of a"
+            echo "file to protect ours also discards whatever fix upstream made in it."
+            echo ""
+            echo "If one of our hooks is what collided, consider whether it can move into"
+            echo "a file of our own instead — every line this fork keeps inside an"
+            echo "upstream file is a line that can collide again."
+          } > /tmp/pr-body.md
+
+          gh pr create \
+            --base "$DEFAULT_BRANCH" \
+            --head "$branch" \
+            --title "Sync upstream — conflicts need resolving" \
+            --body-file /tmp/pr-body.md
+
+          {
+            echo "### Upstream merge conflicted"
+            echo ""
+            echo "Opened a pull request from \`$branch\`. Nothing was pushed to \`$DEFAULT_BRANCH\`."
+          } >> "$GITHUB_STEP_SUMMARY"

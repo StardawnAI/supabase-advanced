@@ -91,9 +91,10 @@ services:
     build:
       context: ./ha
     restart: unless-stopped
-    depends_on:
-      db:
-        condition: service_healthy
+    # Deliberately NOT depends_on db — see the note in docker-compose.ha.yml.
+    # This agent must come up and start reporting even when the database it
+    # watches does not, which on a standby also means it can still supervise
+    # the primary and be promoted once its own database recovers.
     environment:
       HA_NODE_NAME: ${HA_NODE_NAME:-node-b}
       HA_PG_HOST: db

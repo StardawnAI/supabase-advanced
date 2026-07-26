@@ -1,0 +1,66 @@
+# Everything this fork owns, and every mark it leaves in an upstream file.
+#
+# `.github/fork/verify-intact.sh` reads this file and fails if any of it has
+# gone missing. It runs after every automated upstream sync, so an upstream
+# merge can never quietly delete our work — the sync stops and asks instead.
+#
+# Format, one entry per line:
+#     <path>
+#     <path> | <string that must appear in it>
+#
+# A bare path only has to exist. With a marker, the file must also still
+# contain that string — that is how a one-line hook inside an upstream file is
+# protected, since the file itself will always exist.
+#
+# Add a line here whenever the fork adds a file or touches an upstream one.
+
+# --- files that are entirely ours -----------------------------------------
+# Upstream knows nothing about these, so a merge cannot conflict with them.
+# They are listed anyway to catch an accidental local deletion.
+
+docker/ha/agent.py
+docker/ha/test_agent.py
+docker/ha/Dockerfile
+docker/ha/bootstrap-standby.sh
+docker/ha/setup-primary.sh
+docker/ha/render-haproxy.sh
+docker/ha/ha-cli.sh
+docker/ha/README.md
+docker/docker-compose.ha.yml
+docker/standby.compose.yml
+docker/tests/test-ha-failover.sh
+docker/tests/ha-failover.compose.yml
+docker/docker-compose.studio-fork.yml
+docs/PLAN.md
+docs/STATUS.md
+.github/fork/protected-paths.txt
+.github/fork/verify-intact.sh
+.github/workflows/sync-upstream.yml
+.github/workflows/build-studio-image.yml
+
+# Studio: the "Standby servers" page. Everything here is ours except the one
+# menu entry below.
+apps/studio/pages/api/ha/cluster.ts
+apps/studio/routes/api/ha/cluster.ts
+apps/studio/pages/project/[ref]/settings/standby-servers.tsx
+apps/studio/routes/project/$ref/settings/standby-servers.tsx
+apps/studio/data/ha/keys.ts
+apps/studio/data/ha/ha-cluster-query.ts
+apps/studio/components/interfaces/Settings/StandbyServers/StandbyServerList.tsx
+apps/studio/components/interfaces/Settings/StandbyServers/StandbyServers.utils.ts
+apps/studio/components/interfaces/Settings/StandbyServers/__tests__/StandbyServers.utils.test.ts
+
+# --- marks we leave inside upstream files ---------------------------------
+# These are the only places an upstream change can collide with us. Keeping
+# the list short is the whole fork-maintenance strategy: the smaller our
+# footprint in files upstream also edits, the less there is to resolve.
+
+docker/run.sh              | exec sh ha/ha-cli.sh
+docker/.gitattributes      | *.py eol=lf
+docker/.env.example        | HA_FAILOVER_MODE
+
+# The single line that puts our page in Studio's settings menu. This is the
+# one spot most likely to collide: upstream edits this file often, and its
+# self-hosted branch gets restructured. If a sync conflicts here, re-add the
+# entry rather than reverting upstream's version of the file.
+apps/studio/components/layouts/ProjectSettingsLayout/SettingsMenu.utils.tsx | settings/standby-servers
