@@ -70,6 +70,17 @@ export const useGenerateSettingsMenu = () => {
                 },
               ]
             : []),
+          // supabase-advanced fork: self-hosted standby servers. Named
+          // "standby servers", not "high availability", because Studio already
+          // has a High Availability feature for platform projects and the two
+          // are unrelated. Removing this entry only hides the link; the page
+          // still works by URL.
+          {
+            name: 'Standby servers',
+            key: 'standby-servers',
+            url: `/project/${ref}/settings/standby-servers`,
+            items: [],
+          },
         ],
       },
       {

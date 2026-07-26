@@ -41,9 +41,11 @@ services:
     ports:
       # Published so standbys and witnesses on other servers can probe it.
       - ${HA_AGENT_PORT:-8008}:8008
-    depends_on:
-      db:
-        condition: service_healthy
+    # Deliberately NOT depends_on db. The agent's job is to report on that
+    # database, including when it is broken — waiting for it to be healthy
+    # would keep the reporter down at exactly the moment it is needed, e.g.
+    # after a reboot with a damaged data directory. A node it cannot reach is
+    # reported as role "down", which is the correct answer, not a failure.
 
   pg-router:
     container_name: supabase-pg-router

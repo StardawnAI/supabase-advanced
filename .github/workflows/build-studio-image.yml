@@ -1,0 +1,117 @@
+# Builds this fork's Studio image and pushes it to your own registry.
+#
+# Only needed because the self-hosted stack runs a prebuilt Studio image: any
+# change this fork makes under apps/studio reaches a running instance only
+# through an image you build yourself.
+#
+# Before the first run, set these repository secrets:
+#   REGISTRY          e.g. registry.example.com
+#   REGISTRY_USERNAME
+#   REGISTRY_PASSWORD
+#
+# Then point the stack at the result:
+#   sh run.sh config add studio-fork
+#   STUDIO_FORK_IMAGE=<registry>/supabase-advanced-studio:<tag> in docker/.env
+#   sh run.sh recreate studio
+#
+# Manual by default. It is a slow, expensive build — upstream's equivalent job
+# allows two hours — so it runs when you ask for it, typically after an
+# upstream sync has changed apps/studio or after editing the fork's own pages.
+
+name: Build Studio image
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Image tag (defaults to the date)'
+        required: false
+      platforms:
+        description: 'Target platforms'
+        required: false
+        default: 'linux/amd64'
+
+concurrency:
+  group: build-studio-image
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build and push
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Check the registry is configured
+        env:
+          REGISTRY: ${{ secrets.REGISTRY }}
+        run: |
+          if [ -z "$REGISTRY" ]; then
+            echo "::error::Set the REGISTRY, REGISTRY_USERNAME and REGISTRY_PASSWORD secrets first."
+            echo "::error::Without a registry there is nowhere to publish the image to."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+
+      # The fork's own changes must be present in what we are about to build;
+      # an image missing them would deploy silently and look like a bug in the
+      # page rather than a bad build.
+      - name: Verify the fork's changes are intact
+        run: sh .github/fork/verify-intact.sh
+
+      - name: Work out the tag
+        id: meta
+        run: |
+          tag="${{ inputs.tag }}"
+          [ -n "$tag" ] || tag="$(date -u +%Y-%m-%d)-$(git rev-parse --short HEAD)"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "image=${{ secrets.REGISTRY }}/supabase-advanced-studio:$tag" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to the registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.REGISTRY }}
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          # The monorepo root is the build context: the Dockerfile prunes the
+          # workspace itself and needs the whole tree.
+          context: .
+          file: apps/studio/Dockerfile
+          target: production
+          platforms: ${{ inputs.platforms || 'linux/amd64' }}
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.image }}
+            ${{ secrets.REGISTRY }}/supabase-advanced-studio:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Explain what to do with it
+        run: |
+          {
+            echo "### Studio image published"
+            echo ""
+            echo '```'
+            echo "${{ steps.meta.outputs.image }}"
+            echo '```'
+            echo ""
+            echo "On the server, in \`docker/\`:"
+            echo ""
+            echo '```sh'
+            echo "sh run.sh config add studio-fork      # first time only"
+            echo "# set STUDIO_FORK_IMAGE in .env to the image above"
+            echo "sh run.sh recreate studio"
+            echo '```'
+            echo ""
+            echo "Note: \`next build\` runs with typechecking disabled, so a green build"
+            echo "here does not mean the page works. Run \`pnpm --filter studio typecheck\`"
+            echo "before relying on it."
+          } >> "$GITHUB_STEP_SUMMARY"
