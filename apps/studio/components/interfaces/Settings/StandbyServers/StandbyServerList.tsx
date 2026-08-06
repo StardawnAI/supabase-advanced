@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { Admonition } from 'ui-patterns/admonition'
+import { Admonition } from 'ui-patterns/Admonition'
 import { GenericSkeletonLoader } from 'ui-patterns/ShimmeringLoader'
 
 import { describeReplication, summariseHealth } from './StandbyServers.utils'
