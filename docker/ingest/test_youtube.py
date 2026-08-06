@@ -129,6 +129,50 @@ class ParseTranscriptTest(unittest.TestCase):
             fetcher.parse_transcript("<not xml")
 
 
+class Srv3ParseTest(unittest.TestCase):
+    """The dialect real YouTube answered with on the first live run.
+
+    The stub was built from the legacy `<transcript><text>` form; the very
+    first video fetched from the real site came back as srv3 and the parser
+    threw "contained no text". This payload is a shortened copy of that real
+    response ("Me at the zoo", jNQXAC9IVRw).
+    """
+
+    SRV3 = (
+        '<?xml version="1.0" encoding="utf-8" ?><timedtext format="3"> <body> '
+        '<p t="1200" d="2160">All right, so here we are, in front of the elephants</p> '
+        '<p t="5318" d="2656">the cool thing about these guys is that they have really...</p> '
+        '<p t="7974" d="4642">really really long trunks</p> </body> </timedtext>'
+    )
+
+    def test_srv3_milliseconds_are_taken_as_they_are(self):
+        text, segments = fetcher.parse_transcript(self.SRV3)
+        self.assertEqual(len(segments), 3)
+        self.assertEqual(segments[0]["start_ms"], 1200)
+        self.assertEqual(segments[0]["end_ms"], 3360)
+        self.assertIn("elephants", text)
+
+    def test_srv3_word_level_children_are_joined(self):
+        # Auto-generated tracks split a line into <s> children per word.
+        payload = (
+            '<timedtext format="3"><body>'
+            '<p t="0" d="1000"><s>never</s><s> gonna</s><s> give</s></p>'
+            "</body></timedtext>"
+        )
+        text, segments = fetcher.parse_transcript(payload)
+        self.assertEqual(segments[0]["text"], "never gonna give")
+
+    def test_the_legacy_dialect_still_parses(self):
+        payload = (
+            "<transcript>"
+            '<text start="1.2" dur="2.16">All right, so here we are</text>'
+            "</transcript>"
+        )
+        text, segments = fetcher.parse_transcript(payload)
+        self.assertEqual(segments[0]["start_ms"], 1200)
+        self.assertEqual(segments[0]["end_ms"], 3360)
+
+
 class DurationTest(unittest.TestCase):
     def test_hours_minutes_seconds(self):
         self.assertEqual(fetcher.parse_duration("PT1H2M3S"), 3723)
@@ -268,6 +312,47 @@ class ProxyRoutingTest(unittest.TestCase):
         http = fetcher.Http()
         config = http._config_lines("https://x/", {"X-Test": 'a"b'}, use_proxy=False)
         self.assertIn('\\"', config)
+
+
+class DataApiCredentialTest(unittest.TestCase):
+    """The Data API credential may be an API key or an OAuth access token.
+
+    A "sign in with Google" flow produces only the token — there is no API key
+    anywhere in that world, so the fetcher must speak both. The n8n workflow
+    this port replaces authenticated exactly this way.
+    """
+
+    def capture(self):
+        seen = {}
+
+        def fake_get(self, url, headers=None, use_proxy=True):
+            seen["url"] = url
+            seen["headers"] = headers or {}
+            return '{"items": []}'
+
+        return seen, fake_get
+
+    def test_an_api_key_travels_as_the_key_parameter(self):
+        seen, fake_get = self.capture()
+        with mock.patch.object(fetcher.Http, "get", fake_get):
+            fetcher._api(fetcher.Http(), "videos", {"id": "x", "key": "AIzaFakeKey"})
+        self.assertIn("key=AIzaFakeKey", seen["url"])
+        self.assertNotIn("Authorization", seen["headers"])
+
+    def test_an_oauth_token_travels_as_a_bearer_header(self):
+        seen, fake_get = self.capture()
+        with mock.patch.object(fetcher.Http, "get", fake_get):
+            fetcher._api(fetcher.Http(), "videos", {"id": "x", "key": "ya29.a0FakeToken"})
+        # The token must not land in the URL: URLs end up in logs and shell
+        # histories, headers here travel via curl's stdin config.
+        self.assertNotIn("ya29", seen["url"])
+        self.assertEqual(seen["headers"]["Authorization"], "Bearer ya29.a0FakeToken")
+
+    def test_a_prefixed_bearer_value_is_not_double_prefixed(self):
+        seen, fake_get = self.capture()
+        with mock.patch.object(fetcher.Http, "get", fake_get):
+            fetcher._api(fetcher.Http(), "videos", {"id": "x", "key": "Bearer tok123"})
+        self.assertEqual(seen["headers"]["Authorization"], "Bearer tok123")
 
 
 # --------------------------------------------------------------------------

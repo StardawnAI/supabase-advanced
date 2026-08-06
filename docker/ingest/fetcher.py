@@ -282,6 +282,13 @@ def parse_transcript(payload: str) -> tuple[str, list[dict]]:
 
     Returns the text a human would read, plus the segments, so a passage can
     later be pointed back into the video.
+
+    YouTube answers in one of two dialects, and which one arrives is not under
+    our control: the legacy form (`<transcript><text start="1.2" dur="2.1">`,
+    seconds) and srv3 (`<timedtext format="3"><body><p t="1200" d="2100">`,
+    milliseconds, found on real videos today — the first live run hit it
+    immediately). srv3 may nest word-level `<s>` children inside a `<p>`, whose
+    text then lives in the children rather than the node itself.
     """
     try:
         root = ElementTree.fromstring(payload)
@@ -289,7 +296,7 @@ def parse_transcript(payload: str) -> tuple[str, list[dict]]:
         raise TranscriptError(f"caption track is not parseable XML: {exc}") from exc
 
     segments = []
-    for node in root.iter("text"):
+    for node in root.iter("text"):  # legacy dialect, seconds
         content = html.unescape((node.text or "").replace("\n", " ")).strip()
         if not content:
             continue
@@ -300,6 +307,22 @@ def parse_transcript(payload: str) -> tuple[str, list[dict]]:
             "end_ms": int((start + duration) * 1000),
             "text": content,
         })
+
+    if not segments:
+        for node in root.iter("p"):  # srv3 dialect, milliseconds
+            content = html.unescape(
+                " ".join("".join(node.itertext()).split())
+            ).strip()
+            if not content:
+                continue
+            start_ms = int(node.get("t") or 0)
+            duration_ms = int(node.get("d") or 0)
+            segments.append({
+                "start_ms": start_ms,
+                "end_ms": start_ms + duration_ms,
+                "text": content,
+            })
+
     if not segments:
         raise NoCaptionsError("the caption track downloaded but contained no text")
 
@@ -367,9 +390,23 @@ def fetch_via(
 def _api(http: Http, path: str, params: dict) -> dict:
     """One Data API call. Never proxied — this is an authenticated,
     rate-limited API that has no objection to where the request comes from,
-    and proxy requests are the scarce resource."""
+    and proxy requests are the scarce resource.
+
+    The credential arrives in params["key"] and may be either kind Google
+    issues: an API key (AIza…) travels as the key= query parameter, an OAuth
+    access token (ya29…) as a Bearer header. Same endpoints, same responses —
+    but a token is what a "sign in with Google" flow produces, so a source
+    whose credential comes from OAuth must work without a key ever existing.
+    """
+    params = dict(params)
+    headers: dict = {}
+    credential = str(params.get("key") or "")
+    if credential.startswith(("ya29.", "Bearer ")):
+        params.pop("key", None)
+        token = credential.removeprefix("Bearer ")
+        headers["Authorization"] = f"Bearer {token}"
     query = urlencode({k: v for k, v in params.items() if v is not None})
-    raw = http.get(f"{DATA_API}/{path}?{query}", use_proxy=False)
+    raw = http.get(f"{DATA_API}/{path}?{query}", headers=headers, use_proxy=False)
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError as exc:
