@@ -30,6 +30,7 @@
 #   sh run.sh compose-config         # dump fully-resolved docker compose config
 #   sh run.sh secrets                # print key passwords and API keys from .env
 #   sh run.sh ha <command>           # high availability (see: sh run.sh ha help)
+#   sh run.sh ingest <command>       # ingest layer (see: sh run.sh ingest help)
 #
 
 set -e
@@ -267,6 +268,9 @@ case "$CMD" in
     ha)
         exec sh ha/ha-cli.sh "$@"
         ;;
+    ingest)
+        exec sh ingest/ingest-cli.sh "$@"
+        ;;
     help|-h|--help)
         cat <<EOF
 Usage: $(basename "$0") <command>
@@ -292,6 +296,8 @@ Commands:
   secrets               Show key passwords and API keys from .env
   ha <command>          High availability: replicas and failover
                         (run 'ha help' for the list)
+  ingest <command>      Ingest layer: documents in, searchable chunks out
+                        (run 'ingest help' for the list)
 
 EOF
         ;;

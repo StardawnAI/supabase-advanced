@@ -1,0 +1,89 @@
+# Ingest layer overlay.
+#
+# Adds two services and one volume:
+#   ingest-api      accepts documents on :8010 and queues them
+#   ingest-worker   extracts, chunks, embeds; scale it for throughput
+#   ingest-raw      the raw originals, kept so contracts can be improved
+#                   without fetching everything again
+#
+# Enable with:
+#   sh run.sh config add ingest
+#   sh run.sh ingest init          # generates a token, creates a first source
+#   sh run.sh start
+#
+# The schema is created by the services themselves on first start, so there is
+# nothing to mount into the database's init directory — which also means an
+# existing installation gets the ingest layer without being reinitialised.
+
+services:
+  ingest-api:
+    container_name: supabase-ingest-api
+    build:
+      context: ./ingest
+    restart: unless-stopped
+    environment: &ingest-env
+      INGEST_PG_HOST: ${POSTGRES_HOST:-db}
+      INGEST_PG_PORT: ${POSTGRES_PORT:-5432}
+      # Owns the ingest schema and is expected to see every tenant: the
+      # service sets the tenant per request instead. Row level security
+      # applies to everyone else, including anything arriving via PostgREST.
+      INGEST_PG_USER: ${INGEST_PG_USER:-supabase_admin}
+      INGEST_PG_PASSWORD: ${POSTGRES_PASSWORD}
+      INGEST_PG_DATABASE: ${POSTGRES_DB:-postgres}
+      INGEST_API_TOKEN: ${INGEST_API_TOKEN}
+      INGEST_LOG_LEVEL: ${INGEST_LOG_LEVEL:-INFO}
+      INGEST_MAX_BODY_MB: ${INGEST_MAX_BODY_MB:-64}
+      # Optional. Without it chunks are stored without vectors and found by
+      # full text search only, which keeps the stack usable on a machine with
+      # no model server. `run.sh ingest reembed` fills them in later.
+      INGEST_EMBEDDING_URL: ${INGEST_EMBEDDING_URL:-}
+      INGEST_EMBEDDING_MODEL: ${INGEST_EMBEDDING_MODEL:-bge-m3}
+      INGEST_EMBEDDING_TOKEN: ${INGEST_EMBEDDING_TOKEN:-}
+      INGEST_EMBEDDING_DIMENSIONS: ${INGEST_EMBEDDING_DIMENSIONS:-1024}
+      # YouTube. The Data API key is for titles and listings; the transcript
+      # itself does not use it. Empty means YouTube sources cannot run — every
+      # other kind is unaffected.
+      INGEST_YOUTUBE_API_KEY: ${INGEST_YOUTUBE_API_KEY:-}
+      # Where the proxied transcript providers send their requests. Set by
+      # `run.sh ingest warp on`; empty means the chain falls through to the
+      # direct providers.
+      INGEST_PROXY_URL: ${INGEST_PROXY_URL:-}
+    volumes:
+      - ingest-raw:/var/lib/ingest/raw
+    ports:
+      - ${INGEST_PORT:-8010}:8010
+    depends_on:
+      db:
+        condition: service_healthy
+
+  ingest-worker:
+    # No container_name on purpose: a fixed name makes
+    # `docker compose up -d --scale ingest-worker=4` impossible, and scaling
+    # workers is the documented way to add throughput.
+    build:
+      context: ./ingest
+    restart: unless-stopped
+    command: ["/app/worker.py"]
+    environment:
+      <<: *ingest-env
+      INGEST_POLL_SECONDS: ${INGEST_POLL_SECONDS:-3}
+      INGEST_STALL_MINUTES: ${INGEST_STALL_MINUTES:-30}
+    volumes:
+      - ingest-raw:/var/lib/ingest/raw
+    depends_on:
+      db:
+        condition: service_healthy
+    # Several workers can run at once: a job is claimed with FOR UPDATE SKIP
+    # LOCKED, so two of them never pick up the same one.
+    #   docker compose up -d --scale ingest-worker=4
+    healthcheck:
+      # The worker serves nothing, so its health is "the process is alive".
+      # `run.sh start` uses `up --wait`, which needs a check to wait on.
+      test: ["CMD", "pgrep", "-f", "worker.py"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  ingest-raw:

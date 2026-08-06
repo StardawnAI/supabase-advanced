@@ -1,0 +1,74 @@
+# Isolated stack for the ingest end-to-end test.
+#
+# Not the production overlay: this brings its own Postgres so the test can
+# create, fill and destroy a database without touching anything real. The
+# Supabase roles the schema grants to are created in the init script, so the
+# grant path is exercised rather than skipped.
+
+name: ingest-e2e
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_PASSWORD: e2e-secret
+      POSTGRES_DB: postgres
+    volumes:
+      - ./ingest-roles.sql:/docker-entrypoint-initdb.d/00-roles.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+
+  api:
+    build:
+      context: ../ingest
+    environment: &env
+      INGEST_PG_HOST: db
+      INGEST_PG_PORT: 5432
+      INGEST_PG_USER: postgres
+      INGEST_PG_PASSWORD: e2e-secret
+      INGEST_PG_DATABASE: postgres
+      INGEST_API_TOKEN: e2e-token
+      INGEST_LOG_LEVEL: INFO
+      # Point the whole YouTube chain at the stand-in, so the real requests
+      # run — rotation, refusals, caption download — against a far end that
+      # cannot be unreachable or in a mood.
+      INGEST_YT_BASE: http://youtube:8099
+      INGEST_YT_API_BASE: http://youtube:8099/youtube/v3
+      INGEST_YOUTUBE_API_KEY: stub-data-api-key
+    ports:
+      - "18010:8010"
+    volumes:
+      # Shared with the worker: the API writes the original, the worker reads
+      # it back. Mounting it on only one of them is a failure that looks like
+      # a broken extractor.
+      - raw:/var/lib/ingest/raw
+    depends_on:
+      db:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: ../ingest
+    command: ["/app/worker.py"]
+    environment:
+      <<: *env
+      INGEST_POLL_SECONDS: 1
+    volumes:
+      - raw:/var/lib/ingest/raw
+    depends_on:
+      db:
+        condition: service_healthy
+      youtube:
+        condition: service_started
+
+  youtube:
+    image: python:3.13-slim
+    volumes:
+      - ./youtube-stub.py:/stub.py:ro
+    command: ["python3", "-u", "/stub.py"]
+
+volumes:
+  raw:
