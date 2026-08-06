@@ -156,18 +156,182 @@ and this is the input that was actually wanted.
   and fourth fallbacks. Only routes that exist are registered — a provider row
   for something unimplemented would offer a fallback that then fails.
 
-## Stage 2 — the contract engine (next)
+## Verified against real YouTube (2026-08-06)
+
+The chain ran live on stardawneg64, through WARP, against real videos:
+a single video (jNQXAC9IVRw) and the @supabase channel limited to three
+videos — handle resolution, uploads playlist, one fetch job per video,
+srv3 caption parsing, 149 chunks with `{start_ms,end_ms}` spans, full text
+search answering with YouTube deeplinks. Two real defects surfaced and are
+the reason live runs exist:
+
+1. **Real YouTube speaks srv3** (`<timedtext format="3"><p t d>`), not the
+   legacy `<text start dur>` the stub reproduced. Fixed in `parse_transcript`,
+   the real payload is now a regression test.
+2. **The search default config mismatches the index** — `search` defaults to
+   `simple` while chunks carry the contract's config (`german` for the
+   channel templates), so matches exist and are not found. The identical
+   mistake sits in the existing `dawni_chatbotknowledge.hybrid_search`
+   (`websearch_to_tsquery('english')` against a `'simple'` tsvector). Stage 4
+   fixes this structurally: the retrieval facade derives the query config per
+   chunk from its contract instead of trusting a request parameter.
+
+Also learned live: the Data API works with an OAuth Bearer token — the n8n
+workflow never had an API key, and now the fetcher accepts both. Two paper
+cuts for stage 6: `--tenant` demands a UUID where a name would do, and the
+template picker chose `youtube_channel_de` for an English channel.
+
+---
+
+# The road ahead — stages 2, 4, 5, 6
+
+What the user asked for, in his words: paste a YouTube link in the frontend
+and get a searchable knowledge base; chat with that base from the frontend
+with a choice of model; credentials collected once, as simply as possible
+(one Google sign-in, WARP without ceremony); everything also drivable through
+the API; and video itself — frames or clips per passage — designed properly,
+not with dumb fixed-interval cuts.
+
+## Stage 2 — the contract engine
 
 The columns exist and are unused: `extraction_prompt`, `extraction_schema`.
 Today a contract shapes chunking, language and metadata; it does not yet pull
-fields out of the text. That is the step that turns "a searchable transcript"
-into "the policy number, the term and the coverage, as columns".
+fields out of the text — or enrich chunks the way the proven n8n embedding
+pipeline does. Stage 2 ports that pipeline's ideas into the worker, driven by
+contract fields instead of workflow nodes:
 
 - [ ] 1. An LLM call constrained to `extraction_schema`, with the result
      validated before it is stored
-- [ ] 2. `contextual_prefix` — a situating sentence per chunk, generated once
-     per document with prompt caching, not once per chunk from scratch
-- [ ] 3. `quality_score` from the contract's `quality_gates`, so a bad
+- [ ] 2. `contextual_prefix` — a situating sentence per chunk (the Anthropic
+     contextual-retrieval pattern the n8n pipeline already uses), generated
+     with the document cached once via prompt caching, not resent per chunk
+- [ ] 3. **Chapters** (from the n8n pipeline): an LLM pass over the timed
+     chunks yields 5–12 chapters with `{title, summary, start_ms, end_ms}`
+     aligned to chunk boundaries; stored as rows, referenced by chunks.
+     Chapter summaries are themselves embedded — they answer "which video
+     covers X" where chunks answer "where exactly"
+- [ ] 4. Embedding profiles as data: the shipped default stays the generic
+     HTTP endpoint; add a `voyage` profile (`voyage-3-large`, 1024 dims,
+     `input_type` document/query asymmetry — the pipeline's proven setup)
+- [ ] 5. `quality_score` from the contract's `quality_gates`, so a bad
      extraction is visible rather than silently indexed
-- [ ] 4. `eval_case` / `eval_run` — the measurement without which "the contract
-     got better" is an opinion (see section 11 of the architecture plan)
+- [ ] 6. `eval_case` / `eval_run` — recall@5 and MRR per contract version,
+     because "the contract got better" must be measurable (section 11)
+
+## Stage 4 — retrieval facade and chat
+
+Port of the working retrieval prototype (hybrid RRF → rerank → answer with
+[n] citations → YouTube deeplinks at the chunk's start_ms), as RPCs plus one
+endpoint, not as a workflow:
+
+- [ ] 1. `ingest.search_hybrid(tenant, query, query_embedding, …)` — RRF over
+     vector + FTS, **query config derived per contract** (the fix for the
+     mismatch found live), filters on `meta`, `is_current` only
+- [ ] 2. Rerank step in the ingest service (Voyage rerank-2 or none), behind
+     a provider field — same pattern as embedding profiles
+- [ ] 3. `POST /ask`: question → query embedding → hybrid → rerank → LLM
+     answer with numbered citations carrying `{video_url, start_ms}` — the
+     model choice is a parameter, so the same endpoint serves a text-only
+     model or a vision model with keyframes attached (stage 5)
+- [ ] 4. An MCP server over the same facade, so Claude Code and the chatbot
+     use one interface — "check your own database" from any MCP client
+- [ ] 5. Verify: eval_case set for the test corpus, recall@5 measured; the
+     stemming-mismatch case from the live run becomes a regression eval
+
+## Stage 5 — video: frames and segments per passage
+
+Design decisions, made now against today's model landscape (researched
+2026-08-06, sources in STATUS):
+
+**What gets stored.** Three artifact kinds per video, all in object storage
+(R2/MinIO — deliberately not Supabase Storage for hours of video), rows in a
+new `ingest.artifact` table `{id, tenant_id, raw_document_id, kind, span,
+storage_ref, meta}`:
+
+- `video` — the yt-dlp download itself (`bv*[height<=720]`, video-only,
+  ~11–17 MB/min; static screencasts far less). Downloaded once, kept —
+  re-crawling is the expensive, fragile half
+- `keyframe` — one representative frame per detected scene
+- `clip` — optional short segments around chapter boundaries, only when a
+  contract asks for them
+
+**How frames are chosen — the user's instinct is the researched practice.**
+Fixed intervals ("every 2 seconds") are exactly wrong for screencasts: they
+miss slide changes and waste frames on stillness. PySceneDetect
+content-aware detection with a LOW threshold (~1–5; the default 27 finds
+nothing on screen content), one representative frame per scene, plus a
+coarse fixed-interval fallback (1 frame/30–60s) for long static stretches.
+Threshold lives in the contract (`chunk_strategy.scene_threshold`) because
+it needs tuning per corpus.
+
+**Which models can even see video.** Gemini is the only closed-model family
+with true video input (File API, 1 fps + audio; ~$0.02–0.09 per 10-min
+question depending on tier; YouTube-URL input currently free in preview but
+public-only). OpenAI and Anthropic are image-only. Open-weights Qwen3-VL
+takes up to 1h of video and runs self-hosted. Therefore:
+
+- default answer path: **keyframes to any vision model** — 6 frames cost
+  ~$0.001–0.007 per question, provider-agnostic
+- premium path: **Gemini (or Qwen3-VL) with the actual clip** for "where
+  do I click" questions — a per-contract, per-question switch
+- multimodal embeddings (voyage-multimodal-3.5, $0.12/1M tok + $0.60/1B px)
+  as an optional second profile so frames are _searchable_, not only shown
+
+- [ ] 1. `artifact` table + storage adapter (S3 API, works for R2 and MinIO)
+- [ ] 2. `video_fetch` stage: yt-dlp through WARP (needs the PO-token
+     provider plugin and client rotation — same cat-and-mouse as captions,
+     so it joins the provider chain with its own breaker)
+- [ ] 3. `frames` stage: PySceneDetect in the worker image; frames land as
+     artifacts with spans; chunk ↔ keyframes join on span overlap
+- [ ] 4. `/ask` attaches the overlapping keyframes when the chosen model
+     takes images; the citation then carries frame thumbnails
+- [ ] 5. Verify live on a real tutorial video: frames at the real slide
+     changes, not at fixed offsets; a "where do I click" question answered
+     with the right frame attached
+
+## Stage 6 — the frontend, and credentials without ceremony
+
+Split exactly as the architecture plan argues (section 9.4): self-hosted
+Studio has no login of its own, so **Studio reads, the ingest service
+writes**. The Studio page ships in the fork's own image pipeline (the
+standby-servers page established the pattern and the cost).
+
+**Credentials, in order of felt friction:**
+
+- **WARP: zero clicks.** Consumer WARP registers unattended — the overlay
+  already does. The "Cloudflare button" the user imagined is not needed;
+  Zero Trust enrollment is the optional upgrade, not the default.
+- **Google/YouTube: one sign-in.** The live run proved the whole Data API
+  works on OAuth Bearer alone. Ship one Google OAuth app (ours), request
+  only `youtube.readonly`; the token refresh lives in the ingest service;
+  `credential_ref` points at Vault. One click covers video, playlist and
+  channel sources. (n8n uses far broader scopes — ours must not.)
+- **Everything else (Voyage, Anthropic, OpenAI, …): pasted keys** into the
+  ingest service's own token-gated UI, stored in Vault, referenced by
+  `credential_ref` — never in `connector_config`, never readable back in
+  full through the API.
+
+- [ ] 1. Vault-backed credential store in the ingest service
+     (`ingest credential add/list/revoke` + minimal web form on :8010, same
+     token gate as the API)
+- [ ] 2. Google OAuth flow in the ingest service (start URL + callback),
+     storing the refresh token in Vault; sources reference it
+- [ ] 3. Studio page "Knowledge bases" (read-only, via a Next API proxy like
+     /api/ha): sources with status, job throughput, dead jobs with errors,
+     per-source chunk counts — and a paste-a-link box that POSTs to the
+     ingest service with its token, entered per session in the browser
+     (write authority stays with the service token, as with HA promote)
+- [ ] 4. Chat page against `/ask`: model picker (text-only vs. vision vs.
+     video-capable), source filter, answers with timestamped video links
+     and keyframe thumbnails
+- [ ] 5. Paper cuts from the live run: `--tenant` accepts names,
+     template language chosen from the video's caption language rather
+     than defaulting to `_de`
+
+## Execution order
+
+Stage 4 before 2 (retrieval is what makes the existing 149 chunks usable;
+chapters and prefixes improve a working search), then 6.1–6.3 (credentials +
+read-only page — this is what "simple product" hinges on), then 2, then 5,
+then 6.4. Each stage ends with a live run on stardawneg64, not only stubs —
+the srv3 lesson generalises.

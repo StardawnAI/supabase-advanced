@@ -2,6 +2,79 @@
 
 Running log for this fork's own work. Newest first.
 
+## 2026-08-06 — First live run against real YouTube; the plan for 2/4/5/6
+
+### The daily sync runs — and fails at the push, every day
+
+GitHub Actions are back (billing restored); `sync-upstream.yml` has fired on
+schedule since 2026-08-02 and failed all five times at "Push the merge": the
+default workflow token may not push changes under `.github/workflows/**`, and
+upstream touched ten workflow files in the meantime. Fix committed: the
+workflow now uses a `SYNC_TOKEN` secret when present (fine-grained PAT,
+Contents + Workflows + Pull requests read/write) and warns loudly when it is
+missing. **Creating that secret is the one open user action.** The backlog
+merge (212 commits) is being done from the console meanwhile.
+
+### The uncommitted ingest layer: reviewed, fixed, committed
+
+Stages 1+3 sat uncommitted on this machine. An independent review confirmed
+the claims (101 unit tests re-run green, fork guard 58/58, no SQL-injection
+path — values cross into psql via COPY FROM STDIN; secrets stay out of argv)
+and found five small defects, all fixed before committing: the worker's fixed
+container_name made the documented `--scale` impossible; INGEST_STALL_MINUTES
+was documented but never passed into the container; a malformed body value
+crashed the connection instead of returning 400; the image shipped only one
+of the two test suites; and a PLAN sentence about the breaker was imprecise.
+
+### First run against real YouTube — passed, and it earned its keep
+
+On stardawneg64, isolated stack, WARP overlay (healthcheck `warp=on`,
+egress moved to a Cloudflare address):
+
+- "Me at the zoo" end to end: transcript fetched through WARP via the
+  ANDROID identity, chunked with `{start_ms: 1200, end_ms: 18881}`, found by
+  search with its YouTube deeplink.
+- `@supabase` channel, `--max-videos 3`: handle → channel → uploads playlist
+  → three fetch jobs → 149 chunks total across 4 videos (one video answered
+  with 1406 caption segments).
+- The Data API ran entirely on an **OAuth Bearer token** — the n8n workflow
+  never had an API key, and the fetcher now accepts both kinds. The test
+  token was minted server-side on the presting host from the n8n credential
+  (only the ~1h access token left the server; it expired the same hour).
+
+Two real defects only a live run could find:
+
+1. **Real YouTube answers srv3** (`<timedtext format="3"><p t="…" d="…">`,
+   milliseconds), the parser knew only the legacy `<text start dur>` dialect
+   the stub reproduces — every real video parsed as "no captions". Fixed;
+   the real payload is a regression test. 107 unit tests now.
+2. **Search config mismatch**: `search` defaults to `simple`, the channel
+   templates index with `german` — 21 matching chunks, zero results. The
+   existing `dawni_chatbotknowledge.hybrid_search` on Oracle has the same
+   bug (`english` query against a `simple` index). Documented; stage 4's
+   retrieval facade derives the config from the chunk's contract.
+
+### Recon that shaped the plan (details in docs/PLAN-ingest.md)
+
+- The pipeline's n8n is on the **presting** host (n8n-n8n-1, SQLite), with
+  all needed credentials (Voyage, Anthropic, OpenAI, Supabase Oracle, a
+  YouTube OAuth). The knowledge DB (`dawni_chatbotknowledge`: 37 videos,
+  549 chunks, HNSW + GIN) lives in the Coolify Supabase stack on
+  stardawn-oracle-frankfurt. "BM25" there is plain `ts_rank_cd` — no BM25
+  extension is installed.
+- Video models, researched: **Gemini is the only closed model with true
+  video input** (~$0.02–0.09 per 10-min question); OpenAI and Anthropic are
+  image-only; Qwen3-VL is the open-weights video option. Keyframes to any
+  vision model cost ~$0.001–0.007 per question. Frame selection for
+  screencasts: PySceneDetect content-aware at a LOW threshold (~1–5), one
+  representative frame per scene — fixed intervals are the wrong tool, as
+  suspected.
+- The plan for stages 2 (contract engine + chapters + contextual prefixes),
+  4 (hybrid retrieval + /ask + MCP), 5 (video artifacts) and 6 (credentials
+  UX: WARP zero-click, one Google sign-in, Vault-backed keys; Studio reads,
+  ingest service writes) is written out in docs/PLAN-ingest.md, with
+  execution order 4 → 6.1–6.3 → 2 → 5 → 6.4.
+
 ## 2026-08-05 — Ingest stage 3: YouTube, and the gaps stage 1 left
 
 ### Gaps closed first (`sql/003_operations.sql`)
