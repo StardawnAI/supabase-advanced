@@ -31,8 +31,35 @@ docker/standby.compose.yml
 docker/tests/test-ha-failover.sh
 docker/tests/ha-failover.compose.yml
 docker/docker-compose.studio-fork.yml
+
+# Ingest layer: documents in, searchable chunks out.
+docker/ingest/db.py
+docker/ingest/storage.py
+docker/ingest/api.py
+docker/ingest/worker.py
+docker/ingest/admin.py
+docker/ingest/fetcher.py
+docker/ingest/test_ingest.py
+docker/ingest/test_youtube.py
+docker/ingest/ingest-cli.sh
+docker/ingest/Dockerfile
+docker/ingest/README.md
+docker/ingest/sql/001_schema.sql
+docker/ingest/sql/002_templates.sql
+docker/ingest/sql/003_operations.sql
+docker/ingest/sql/004_youtube.sql
+docker/docker-compose.ingest.yml
+docker/docker-compose.warp.yml
+docker/tests/test-ingest.sh
+docker/tests/test-ingest-youtube.sh
+docker/tests/ingest.compose.yml
+docker/tests/ingest-roles.sql
+docker/tests/youtube-stub.py
+
 docs/PLAN.md
+docs/PLAN-ingest.md
 docs/STATUS.md
+docs/supabase-ingest-plattform-plan.md
 .github/fork/protected-paths.txt
 .github/fork/verify-intact.sh
 .github/workflows/sync-upstream.yml
@@ -56,8 +83,10 @@ apps/studio/components/interfaces/Settings/StandbyServers/__tests__/StandbyServe
 # footprint in files upstream also edits, the less there is to resolve.
 
 docker/run.sh              | exec sh ha/ha-cli.sh
+docker/run.sh              | exec sh ingest/ingest-cli.sh
 docker/.gitattributes      | *.py eol=lf
 docker/.env.example        | HA_FAILOVER_MODE
+docker/.env.example        | INGEST_API_TOKEN
 
 # The single line that puts our page in Studio's settings menu. This is the
 # one spot most likely to collide: upstream edits this file often, and its

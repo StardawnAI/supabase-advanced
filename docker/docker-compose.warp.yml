@@ -1,0 +1,56 @@
+# Cloudflare WARP as a SOCKS5 proxy for the ingest layer.
+#
+# Why this exists: YouTube refuses the innertube player call from datacenter
+# addresses far more often than from ordinary ones. Routing those two requests
+# through WARP puts an ordinary-looking address in front of them. Nothing else
+# in the stack goes through it — the Data API has no objection to where a
+# request comes from, and proxy requests are the scarce resource.
+#
+# Enable with:
+#   sh run.sh ingest warp on      # adds this overlay and points the workers at it
+#   sh run.sh start
+#   sh run.sh ingest warp status  # shows the egress address WARP is giving you
+#
+# Consumer WARP, not Zero Trust: it registers itself with no account, no login
+# and no enrollment link. Zero Trust buys a stable, dedicated egress address —
+# which also means a permanently blockable one. Start here; move only if the
+# shared pool turns out to be blocked.
+
+services:
+  warp:
+    container_name: supabase-warp
+    image: caomingjun/warp:latest
+    restart: unless-stopped
+    environment:
+      # The SOCKS5 port inside the container. The default of this image, and
+      # what the existing n8n workflow already points at.
+      WARP_SLEEP: 2
+    # WARP builds a WireGuard tunnel even in proxy mode, so it needs to
+    # configure network interfaces. Without these three the container starts,
+    # `warp-cli connect` fails quietly, and the proxy accepts connections it
+    # then cannot forward — which looks like YouTube blocking you.
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    sysctls:
+      net.ipv6.conf.all.disable_ipv6: 0
+      net.ipv4.conf.all.src_valid_mark: 1
+    volumes:
+      # Keeps the registration. Without it every restart registers afresh and
+      # takes a new egress address, mid-run.
+      - warp-data:/var/lib/cloudflare-warp
+    healthcheck:
+      # Asks Cloudflare whether this connection is going through WARP. A proxy
+      # that answers but is not connected is the failure worth catching, and it
+      # is invisible to a port check.
+      test:
+        - CMD-SHELL
+        - "curl -s --socks5-hostname 127.0.0.1:1080 https://www.cloudflare.com/cdn-cgi/trace | grep -q 'warp=on'"
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  warp-data:

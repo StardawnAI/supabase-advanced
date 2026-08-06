@@ -54,6 +54,20 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ github.event.repository.default_branch }}
+          # The default GITHUB_TOKEN cannot push changes to .github/workflows/**,
+          # and upstream edits its workflows constantly — so every daily merge
+          # that includes one failed at the push step (observed: five failures
+          # in a row, 2026-08-02..06, all at "Push the merge"). SYNC_TOKEN is a
+          # fine-grained PAT with Contents+Workflows+Pull requests read/write.
+          token: ${{ secrets.SYNC_TOKEN || github.token }}
+
+      - name: Warn early when SYNC_TOKEN is missing
+        env:
+          HAS_SYNC_TOKEN: ${{ secrets.SYNC_TOKEN != '' }}
+        run: |
+          if [ "$HAS_SYNC_TOKEN" != "true" ]; then
+            echo "::warning::SYNC_TOKEN is not set. The default token cannot push upstream's workflow-file changes, so most syncs will fail at the push step. Create a fine-grained PAT (Contents: read/write, Workflows: read/write, Pull requests: read/write, repo StardawnAI/supabase-advanced) and add it as the SYNC_TOKEN repository secret."
+          fi
 
       - name: Identify as the sync bot
         run: |
@@ -113,7 +127,9 @@ jobs:
       - name: Open a pull request for the conflict
         if: steps.merge.outputs.conflict == 'true'
         env:
-          GH_TOKEN: ${{ github.token }}
+          # Also needs the PAT: repositories default to forbidding Actions from
+          # creating pull requests with the built-in token.
+          GH_TOKEN: ${{ secrets.SYNC_TOKEN || github.token }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -eu

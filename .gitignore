@@ -167,3 +167,6 @@ keys.json
 examples/**/package-lock.json
 examples/**/yarn.lock
 examples/**/pnpm-lock.yaml
+# n8n workflow exports kept for reference — they contain live credentials
+# in plain text (service_role JWTs, API keys) and must never be committed.
+docs/n8n/
